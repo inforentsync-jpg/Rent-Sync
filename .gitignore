@@ -6,3 +6,6 @@ node_modules/
 .rent-sync-dev-data.json.*.tmp
 *.tsbuildinfo
 coverage/
+.neon
+
+.vercel
