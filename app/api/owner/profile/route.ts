@@ -3,6 +3,7 @@ import { prisma } from "@/lib/database";
 import { getDevOwner, updateDevOwnerProfile } from "@/lib/dev-store";
 import { hashPassword } from "@/lib/password";
 import { getOwnerSession } from "@/lib/session";
+import { shouldUseDatabase } from "@/lib/storage-mode";
 
 type ProfileInput = {
   fullName: string;
@@ -43,7 +44,7 @@ function profileResponse(
             : owner.createdAt,
         passwordConfigured,
       },
-      testOtp: process.env.NODE_ENV === "production" ? null : "1234",
+      testOtp: shouldUseDatabase() ? null : "1234",
     },
     { headers: { "Cache-Control": "no-store" } },
   );
@@ -57,7 +58,7 @@ export async function GET() {
 
   try {
     const owner =
-      process.env.NODE_ENV !== "production"
+      !shouldUseDatabase()
         ? await getDevOwner(session.mobileNumber)
         : await prisma.propertyOwner.findUnique({
             where: { mobileNumber: session.mobileNumber },
@@ -124,7 +125,7 @@ export async function PATCH(request: Request) {
   try {
     const passwordHash = password ? await hashPassword(password) : undefined;
     const owner =
-      process.env.NODE_ENV !== "production"
+      !shouldUseDatabase()
         ? await updateDevOwnerProfile(
             session.mobileNumber,
             fullName,

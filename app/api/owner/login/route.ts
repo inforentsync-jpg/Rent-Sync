@@ -3,6 +3,7 @@ import { getDevOwner, getDevOwnerPasswordHash } from "@/lib/dev-store";
 import { prisma } from "@/lib/database";
 import { verifyPassword } from "@/lib/password";
 import { createSessionToken, SESSION_COOKIE } from "@/lib/session";
+import { shouldUseDatabase } from "@/lib/storage-mode";
 
 type LoginInput = {
   mobileNumber: string;
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Enter a valid mobile number." }, { status: 400 });
   }
   if (body.method === "otp") {
-    if (process.env.NODE_ENV === "production") {
+    if (shouldUseDatabase()) {
       return NextResponse.json(
         { error: "OTP sign-in is unavailable until a real OTP provider is configured." },
         { status: 503 },
@@ -56,7 +57,7 @@ export async function POST(request: Request) {
 
   try {
     const owner =
-      process.env.NODE_ENV !== "production"
+      !shouldUseDatabase()
         ? await (async () => {
             const devOwner = await getDevOwner(mobileNumber);
             if (!devOwner) return null;

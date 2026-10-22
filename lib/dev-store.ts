@@ -3,6 +3,8 @@ import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { addElevenMonthTerm } from "@/lib/rental-agreement";
 import { getRenewalAgreementTerm } from "@/lib/agreement-year";
+import { getNextAgreementApprovals } from "@/lib/agreement-approval";
+import { shouldUseDatabase } from "@/lib/storage-mode";
 
 export type DevBuilding = {
   id: string;
@@ -72,8 +74,11 @@ export type DevAgreement = {
   monthlyRent: number;
   securityDeposit: number;
   terms: string;
+  importantTerms?: string;
   status: "ACTIVE" | "DRAFT";
   agreementYear: number;
+  ownerApprovedAt?: string | null;
+  tenantApprovedAt?: string | null;
   renewalOfId?: string | null;
   createdAt: string;
 };
@@ -95,8 +100,8 @@ const STORE_PATH = path.join(process.cwd(), ".rent-sync-dev-data.json");
 let storeQueue: Promise<void> = Promise.resolve();
 
 function assertDevelopmentMode() {
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("Local demo storage is disabled in production.");
+  if (shouldUseDatabase()) {
+    throw new Error("Local demo storage is disabled while database mode is active.");
   }
 }
 
@@ -142,6 +147,9 @@ async function readStore(): Promise<DevStore> {
         delete currentAgreement.renewalOfId;
         return {
           ...currentAgreement,
+          importantTerms: agreement.importantTerms ?? "",
+          ownerApprovedAt: agreement.ownerApprovedAt ?? null,
+          tenantApprovedAt: agreement.tenantApprovedAt ?? null,
           startDate: legacyStart,
           endDate: legacySource
             ? addElevenMonthTerm(legacyStart) ?? agreement.endDate
@@ -570,6 +578,7 @@ export function createDevTenant(
       monthlyRent: asset.monthlyRent,
       securityDeposit: asset.securityDeposit,
       terms: "",
+      importantTerms: "",
       status: "DRAFT",
       agreementYear,
       createdAt: now,
@@ -595,6 +604,7 @@ export function createDevTenant(
         monthlyRent: asset.monthlyRent,
         securityDeposit: asset.securityDeposit,
         terms: "",
+        importantTerms: "",
         status: "DRAFT",
         agreementYear: renewalTerm.year,
         createdAt: now,
@@ -675,13 +685,126 @@ export function createDevAgreement(input: {
       monthlyRent: asset.monthlyRent,
       securityDeposit: asset.securityDeposit,
       terms: input.terms.trim(),
-      status: "ACTIVE",
+      importantTerms: "",
+      status: "DRAFT",
       agreementYear,
       createdAt: now.toISOString(),
     };
     store.agreements.unshift(agreement);
     await writeStore(store);
     return { ...agreement, tenant, asset };
+  });
+}
+
+export type AgreementReviewInput = {
+  startDate: string;
+  endDate: string;
+  monthlyRent: number;
+  securityDeposit: number;
+  terms: string;
+  importantTerms: string;
+};
+
+export async function reviewDevAgreement(
+  mobileNumber: string,
+  role: "OWNER" | "TENANT",
+  agreementId: string,
+  input: AgreementReviewInput,
+) {
+  return withStore(async (store) => {
+    const agreement = store.agreements.find((entry) => entry.id === agreementId);
+    if (!agreement || agreement.status !== "DRAFT") return null;
+    const tenant = store.tenants.find((entry) => entry.id === agreement.tenantId);
+    const asset = store.assets.find((entry) => entry.id === agreement.assetId);
+    const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
+    const company = store.companies.find((entry) => entry.id === building?.companyId);
+    if (!tenant || !asset || !building) return null;
+
+    const isAuthorized =
+      role === "OWNER"
+        ? (company?.ownerId ?? building.ownerId) ===
+          store.owners.find((entry) => entry.mobileNumber === mobileNumber)?.id
+        : tenant.mobileNumber === mobileNumber;
+    if (!isAuthorized) return null;
+    if (
+      role === "OWNER"
+        ? agreement.ownerApprovedAt != null
+        : agreement.ownerApprovedAt == null || agreement.tenantApprovedAt != null
+    ) {
+      return null;
+    }
+
+    if (
+      addElevenMonthTerm(input.startDate) !== input.endDate ||
+      !Number.isInteger(input.monthlyRent) ||
+      input.monthlyRent <= 0 ||
+      !Number.isInteger(input.securityDeposit) ||
+      input.securityDeposit < 0
+    ) {
+      throw new Error("Enter valid agreement dates, monthly rent, and security deposit.");
+    }
+    const agreementYear = Number(input.startDate.slice(0, 4));
+    if (
+      store.agreements.some(
+        (entry) =>
+          entry.id !== agreement.id &&
+          entry.assetId === agreement.assetId &&
+          entry.tenantId === agreement.tenantId &&
+          entry.agreementYear === agreementYear,
+      )
+    ) {
+      throw new DevAgreementConflictError(
+        "An agreement already exists for this tenant, asset, and year.",
+      );
+    }
+    if (
+      store.agreements.some(
+        (entry) =>
+          entry.id !== agreement.id &&
+          agreementOverlaps(entry, asset.id, input.startDate, input.endDate),
+      )
+    ) {
+      throw new DevAgreementConflictError("This asset already has an active agreement for those dates.");
+    }
+    const hasChanges =
+      agreement.startDate !== input.startDate ||
+      agreement.endDate !== input.endDate ||
+      agreement.monthlyRent !== input.monthlyRent ||
+      agreement.securityDeposit !== input.securityDeposit ||
+      agreement.terms !== input.terms ||
+      (agreement.importantTerms ?? "") !== input.importantTerms;
+    const approvalState = getNextAgreementApprovals(
+      {
+        ownerApprovedAt: agreement.ownerApprovedAt ?? null,
+        tenantApprovedAt: agreement.tenantApprovedAt ?? null,
+      },
+      role,
+      hasChanges,
+      new Date(),
+    );
+    const updatedAgreement: DevAgreement = {
+      ...agreement,
+      startDate: input.startDate,
+      endDate: input.endDate,
+      agreementYear,
+      monthlyRent: input.monthlyRent,
+      securityDeposit: input.securityDeposit,
+      terms: input.terms,
+      importantTerms: input.importantTerms,
+      status: "DRAFT",
+      ownerApprovedAt: approvalState.ownerApprovedAt
+        ? new Date(approvalState.ownerApprovedAt).toISOString()
+        : null,
+      tenantApprovedAt: approvalState.tenantApprovedAt
+        ? new Date(approvalState.tenantApprovedAt).toISOString()
+        : null,
+    };
+    if (updatedAgreement.ownerApprovedAt && updatedAgreement.tenantApprovedAt) {
+      updatedAgreement.status = "ACTIVE";
+    }
+    Object.assign(agreement, updatedAgreement);
+    await writeStore(store);
+    return agreement;
   });
 }
 
@@ -747,6 +870,7 @@ export function generateDevAnnualAgreementDrafts(mobileNumber: string, now = new
           monthlyRent: asset.monthlyRent,
           securityDeposit: asset.securityDeposit,
           terms: "",
+          importantTerms: "",
           status: "DRAFT",
           agreementYear: term.year,
           createdAt: now.toISOString(),

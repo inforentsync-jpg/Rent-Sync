@@ -3,6 +3,7 @@ import { prisma } from "@/lib/database";
 import { createDevOwner } from "@/lib/dev-store";
 import { hashPassword } from "@/lib/password";
 import { createSessionToken, SESSION_COOKIE } from "@/lib/session";
+import { shouldUseDatabase } from "@/lib/storage-mode";
 
 type RegistrationBody = {
   fullName: string;
@@ -58,7 +59,7 @@ export async function POST(request: Request) {
 
   const passwordHash = await hashPassword(body.password);
   try {
-    if (process.env.NODE_ENV !== "production") {
+    if (!shouldUseDatabase()) {
       const owner = await createDevOwner(fullName, mobileNumber, passwordHash);
       if (!owner) {
         return NextResponse.json(

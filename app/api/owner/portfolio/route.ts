@@ -16,6 +16,7 @@ import { getOwnerSession } from "@/lib/session";
 import { addElevenMonthTerm, hasValidElevenMonthTerm } from "@/lib/rental-agreement";
 import { getRenewalAgreementTerm } from "@/lib/agreement-year";
 import { generateAnnualAgreementDrafts } from "@/lib/annual-agreement-drafts";
+import { shouldUseDatabase } from "@/lib/storage-mode";
 
 type PortfolioInput = Record<string, unknown>;
 
@@ -45,7 +46,7 @@ export async function GET() {
     return NextResponse.json({ error: "Owner sign-in is required." }, { status: 401 });
   }
 
-  if (process.env.NODE_ENV !== "production") {
+  if (!shouldUseDatabase()) {
     try {
       await generateDevAnnualAgreementDrafts(session.mobileNumber);
       const portfolio = await getDevOwnerPortfolio(session.mobileNumber);
@@ -202,7 +203,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Agreement notes must be 2,000 characters or fewer." }, { status: 400 });
     }
 
-    if (process.env.NODE_ENV !== "production") {
+    if (!shouldUseDatabase()) {
       try {
         const portfolio = await getDevOwnerPortfolio(session.mobileNumber);
         const asset = portfolio?.assets.find((entry) => entry.id === assetId);
@@ -294,6 +295,8 @@ export async function POST(request: Request) {
           monthlyRent: asset.monthlyRent,
           securityDeposit: asset.securityDeposit,
           terms,
+          importantTerms: "",
+          status: "DRAFT",
         },
       });
       return NextResponse.json({ agreement }, { status: 201 });
@@ -317,7 +320,7 @@ export async function POST(request: Request) {
     }
   }
 
-  if (process.env.NODE_ENV !== "production") {
+  if (!shouldUseDatabase()) {
     try {
       if (kind === "company") {
         const name = text(body, "name", 160);
@@ -634,7 +637,7 @@ export async function PATCH(request: Request) {
     ward,
   };
 
-  if (process.env.NODE_ENV !== "production") {
+  if (!shouldUseDatabase()) {
     try {
       const asset = await updateDevAsset(session.mobileNumber, assetId, input);
       return NextResponse.json({ asset });

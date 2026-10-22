@@ -120,7 +120,10 @@ model RentalAgreement {
   monthlyRent      Int
   securityDeposit  Int      @default(0)
   terms            String   @db.Text
+  importantTerms   String   @default("") @db.Text
   status           String   @default("ACTIVE") @db.VarChar(20)
+  ownerApprovedAt  DateTime? @db.Timestamptz(6)
+  tenantApprovedAt DateTime? @db.Timestamptz(6)
   createdAt        DateTime @default(now())
   asset            Asset    @relation(fields: [assetId], references: [id], onDelete: Restrict)
   tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)

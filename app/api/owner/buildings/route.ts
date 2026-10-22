@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/database";
 import { listDevOwnerBuildings } from "@/lib/dev-store";
 import { getOwnerSession } from "@/lib/session";
+import { shouldUseDatabase } from "@/lib/storage-mode";
 
 export async function GET() {
   const session = await getOwnerSession();
@@ -9,7 +10,7 @@ export async function GET() {
     return NextResponse.json({ error: "Owner sign-in is required." }, { status: 401 });
   }
 
-  if (process.env.NODE_ENV !== "production") {
+  if (!shouldUseDatabase()) {
     try {
       const buildings = await listDevOwnerBuildings(session.mobileNumber);
       if (!buildings) {

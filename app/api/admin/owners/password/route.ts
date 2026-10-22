@@ -3,6 +3,7 @@ import { prisma } from "@/lib/database";
 import { setDevOwnerPassword } from "@/lib/dev-store";
 import { hashPassword } from "@/lib/password";
 import { getAdminSession } from "@/lib/session";
+import { shouldUseDatabase } from "@/lib/storage-mode";
 
 export async function POST(request: Request) {
   if (!(await getAdminSession())) {
@@ -43,7 +44,7 @@ export async function POST(request: Request) {
 
   try {
     const passwordHash = await hashPassword(body.password);
-    if (process.env.NODE_ENV !== "production") {
+    if (!shouldUseDatabase()) {
       const updated = await setDevOwnerPassword(mobileNumber, passwordHash);
       if (!updated) {
         return NextResponse.json({ error: "Owner account was not found." }, { status: 404 });

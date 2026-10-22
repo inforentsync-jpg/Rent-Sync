@@ -7,6 +7,7 @@ import {
 import { prisma } from "@/lib/database";
 import { hasValidElevenMonthTerm } from "@/lib/rental-agreement";
 import { getTenantSession } from "@/lib/session";
+import { shouldUseDatabase } from "@/lib/storage-mode";
 
 type AgreementInput = {
   assetId: string;
@@ -30,7 +31,7 @@ export async function GET() {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "Tenant sign-in is required." }, { status: 401 });
   try {
-    if (process.env.NODE_ENV !== "production") {
+    if (!shouldUseDatabase()) {
       const portal = await getDevTenantPortal(session.mobileNumber);
       if (!portal) return NextResponse.json({ error: "Tenant account was not found." }, { status: 404 });
       return NextResponse.json({
@@ -82,8 +83,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const session = await getTenantSession();
   if (!session) return NextResponse.json({ error: "Tenant sign-in is required." }, { status: 401 });
-  const runtimeEnvironment: string = process.env.NODE_ENV;
-  if (runtimeEnvironment === "production") {
+  if (shouldUseDatabase()) {
     return NextResponse.json(
       { error: "Agreement creation using the test flow is disabled in production." },
       { status: 503 },

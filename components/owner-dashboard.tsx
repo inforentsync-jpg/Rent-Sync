@@ -17,6 +17,9 @@ import {
 } from "lucide-react";
 import { addElevenMonthTerm, getAgreementStatus, type AgreementStatus } from "@/lib/rental-agreement";
 import AgreementFacts from "@/components/agreement-facts";
+import AgreementApprovalWizard, {
+  type ReviewableAgreement,
+} from "@/components/agreement-approval-wizard";
 
 type Company = { id: string; name: string };
 type Building = {
@@ -55,8 +58,11 @@ type Agreement = {
   monthlyRent: number;
   securityDeposit?: number;
   terms?: string;
+  importantTerms?: string;
   status?: string;
   agreementYear?: number;
+  ownerApprovedAt?: string | null;
+  tenantApprovedAt?: string | null;
   createdAt: string;
 };
 type Portfolio = {
@@ -140,6 +146,7 @@ export default function OwnerDashboard() {
   );
   const routeModule = agreementYearMatch ? "agreements" : routeParams.get("module");
   const selectedModule: ModuleKey = isModuleKey(routeModule) ? routeModule : "companies";
+  const approvalModule = routeModule === "approve-agreements";
   const selectedRecordId = routeParams.get("id");
   const selectedAgreementYear = agreementYearMatch?.[1] ?? null;
   const [portfolio, setPortfolio] = useState(emptyPortfolio);
@@ -155,6 +162,7 @@ export default function OwnerDashboard() {
   const [assetEditError, setAssetEditError] = useState("");
   const [assetEditSaving, setAssetEditSaving] = useState(false);
   const [agreementTab, setAgreementTab] = useState<AgreementTab>("kyc");
+  const [reviewingAgreementId, setReviewingAgreementId] = useState<string | null>(null);
   const [tenantTab, setTenantTab] = useState<TenantTab>("kyc");
 
   const loadPortfolio = useCallback(async () => {
@@ -361,7 +369,11 @@ export default function OwnerDashboard() {
       rows: portfolio.agreements.map((agreement) => {
         const tenant = portfolio.tenants.find((entry) => entry.id === agreement.tenantId);
         const asset = portfolio.assets.find((entry) => entry.id === agreement.assetId);
-        const status = agreement.status === "DRAFT" ? "Draft" : getAgreementStatus(agreement.endDate);
+        const status = agreement.status === "DRAFT"
+          ? agreement.ownerApprovedAt ? "Awaiting tenant approval" : "Awaiting owner approval"
+          : agreement.ownerApprovedAt && agreement.tenantApprovedAt
+            ? "Approved"
+            : getAgreementStatus(agreement.endDate);
         return {
           key: agreement.id,
           cells: [
@@ -377,6 +389,9 @@ export default function OwnerDashboard() {
       }),
     },
   }[selectedModule];
+  const pendingOwnerApprovals = portfolio.agreements.filter(
+    (agreement) => agreement.status === "DRAFT" && !agreement.ownerApprovedAt,
+  );
   const agreementYears = [...new Set(
     portfolio.agreements.map((agreement) => getAgreementYear(agreement.startDate)),
   )].sort((left, right) => Number(right) - Number(left));
@@ -418,6 +433,19 @@ export default function OwnerDashboard() {
 
   function handleSelectModule(module: ModuleKey) {
     syncModuleUrl(module);
+  }
+
+  function openApprovalQueue() {
+    const params = new URLSearchParams(window.location.search);
+    params.set("module", "approve-agreements");
+    params.delete("id");
+    window.history.pushState({}, "", `/owner/dashboard?${params.toString()}`);
+    window.dispatchEvent(new Event("rent-sync-route-change"));
+    setMobileMenu(false);
+  }
+
+  function openAgreementReview(agreementId: string) {
+    setReviewingAgreementId(agreementId);
   }
 
   function handleEditRecord(recordId: string) {
@@ -580,11 +608,21 @@ export default function OwnerDashboard() {
               key={key}
               type="button"
               onClick={() => handleSelectModule(key as ModuleKey)}
-              className={`mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-[12px] font-medium transition ${selectedModule === key ? "bg-[#e9f3eb] text-[#154b34]" : "text-white/70 hover:bg-white/[0.07] hover:text-white"}`}
+              className={`mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-[12px] font-medium transition ${!approvalModule && selectedModule === key ? "bg-[#e9f3eb] text-[#154b34]" : "text-white/70 hover:bg-white/[0.07] hover:text-white"}`}
             >
               <Icon size={16} /> {label}
             </button>
           ))}
+          {pendingOwnerApprovals.length > 0 ? (
+            <button
+              type="button"
+              onClick={openApprovalQueue}
+              className={`mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-[12px] font-medium transition ${approvalModule ? "bg-[#e9f3eb] text-[#154b34]" : "text-white/70 hover:bg-white/[0.07] hover:text-white"}`}
+            >
+              <FileText size={16} /> Approve agreements
+              <span className="ml-auto rounded-full bg-white/15 px-2 py-0.5 text-[9px]">{pendingOwnerApprovals.length}</span>
+            </button>
+          ) : null}
         </nav>
         <div className="border-t border-white/10 p-4">
           <a href="/owner/profile" onClick={() => setMobileMenu(false)} className="mb-2 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-[11px] text-white/65 transition hover:bg-white/[0.07] hover:text-white"><UserRound size={15} /> Profile</a>
@@ -607,7 +645,38 @@ export default function OwnerDashboard() {
         </header>
 
         <main className="mx-auto max-w-[1450px] px-5 py-7 sm:px-8 sm:py-9 lg:px-10">
-          {selectedAgreement && !recordEditMode ? (
+          {approvalModule ? (
+            <section className="rounded-2xl border border-[#e7ece7] bg-white shadow-[0_4px_20px_-12px_rgba(28,53,37,0.12)]">
+              <div className="border-b border-[#edf0ed] px-5 py-5 sm:px-6">
+                <h2 className="text-[20px] font-semibold text-[#203328]">Approve agreements</h2>
+                <p className="mt-1 text-[11px] text-[#819087]">Review each draft through KYC, Rent, Advance, Terms and Important Terms before approving it.</p>
+              </div>
+              {pendingOwnerApprovals.length ? (
+                <div className="divide-y divide-[#f0f2f0]">
+                  {pendingOwnerApprovals.map((agreement) => {
+                    const tenant = portfolio.tenants.find((entry) => entry.id === agreement.tenantId);
+                    const asset = portfolio.assets.find((entry) => entry.id === agreement.assetId);
+                    const building = asset
+                      ? portfolio.buildings.find((entry) => entry.id === asset.buildingId)
+                      : null;
+                    return (
+                      <article key={agreement.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+                        <div>
+                          <h3 className="text-[12px] font-semibold text-[#294034]">{tenant?.fullName ?? "Tenant"} · {agreement.agreementNumber}</h3>
+                          <p className="mt-1 text-[10px] text-[#79867e]">{asset ? `${asset.name} · ${asset.unitNumber}` : "Property"}{building ? ` · ${building.name}` : ""} · ₹{agreement.monthlyRent.toLocaleString("en-IN")}/month</p>
+                        </div>
+                        <button type="button" onClick={() => openAgreementReview(agreement.id)} className="h-9 rounded-lg bg-[#176b4b] px-4 text-[10px] font-semibold text-white hover:bg-[#10583c]">
+                          Review agreement
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="px-5 py-8 text-[12px] text-[#849188]">There are no draft agreements awaiting owner approval.</p>
+              )}
+            </section>
+          ) : selectedAgreement && !recordEditMode ? (
             <article className="rounded-2xl border border-[#e7ece7] bg-white shadow-[0_4px_20px_-12px_rgba(28,53,37,0.12)]">
               <div className="flex flex-col justify-between gap-3 border-b border-[#edf0ed] px-5 py-4 sm:flex-row sm:items-center sm:px-6">
                 <div>
@@ -621,7 +690,9 @@ export default function OwnerDashboard() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button type="button" onClick={startRecordEdit} className="rounded-lg border border-[#dfe8e1] bg-[#f7faf7] px-3 py-2 text-[10px] font-semibold text-[#355942]">Edit</button>
+                  {selectedAgreement.status === "DRAFT" && !selectedAgreement.ownerApprovedAt ? (
+                    <button type="button" onClick={() => openAgreementReview(selectedAgreement.id)} className="rounded-lg border border-[#dfe8e1] bg-[#f7faf7] px-3 py-2 text-[10px] font-semibold text-[#355942]">Review & approve</button>
+                  ) : null}
                   <button type="button" onClick={() => handleDeleteRecord(selectedAgreement.id)} className="rounded-lg border border-[#f0d9d2] bg-[#fff8f7] px-3 py-2 text-[10px] font-semibold text-[#9a4a3d]">Delete</button>
                   <button
                     type="button"
@@ -698,9 +769,17 @@ export default function OwnerDashboard() {
                 {agreementTab === "important-terms" ? (
                   <div className="sm:col-span-2 space-y-5">
                     <TabPanelHeading title="Important terms" description="Key conditions and notes for this rental agreement." />
-                    <PanelMessage>Important terms are not recorded separately for this agreement.</PanelMessage>
+                    {selectedAgreement.importantTerms ? (
+                      <DetailField label="Important terms" value={selectedAgreement.importantTerms} />
+                    ) : (
+                      <PanelMessage>No important terms have been recorded for this agreement.</PanelMessage>
+                    )}
                   </div>
                 ) : null}
+              </div>
+              <div className="grid gap-3 border-t border-[#edf0ed] bg-[#fbfcfb] p-5 sm:grid-cols-2 sm:p-6">
+                <AgreementApprovalStatus label="Owner approved" value={selectedAgreement.ownerApprovedAt} status={selectedAgreement.status} />
+                <AgreementApprovalStatus label="Tenant approved" value={selectedAgreement.tenantApprovedAt} status={selectedAgreement.status} />
               </div>
             </article>
           ) : selectedTenant && !recordEditMode ? (
@@ -1130,6 +1209,30 @@ export default function OwnerDashboard() {
           </section>
         </div>
       )}
+      {reviewingAgreementId ? (() => {
+        const agreement = portfolio.agreements.find((entry) => entry.id === reviewingAgreementId);
+        if (!agreement) return null;
+        const tenant = portfolio.tenants.find((entry) => entry.id === agreement.tenantId);
+        const asset = portfolio.assets.find((entry) => entry.id === agreement.assetId);
+        const building = asset
+          ? portfolio.buildings.find((entry) => entry.id === asset.buildingId)
+          : null;
+        return (
+          <AgreementApprovalWizard
+            agreement={agreement as ReviewableAgreement}
+            party="OWNER"
+            tenantName={tenant?.fullName ?? "Tenant not found"}
+            tenantMobile={tenant?.mobileNumber ?? null}
+            propertyName={asset ? `${asset.name} · ${asset.unitNumber}` : "Property not found"}
+            buildingAddress={building ? [building.address, building.city, building.state, building.postalCode].filter(Boolean).join(", ") : ""}
+            onClose={() => setReviewingAgreementId(null)}
+            onApproved={() => {
+              setReviewingAgreementId(null);
+              void loadPortfolio();
+            }}
+          />
+        );
+      })() : null}
     </div>
   );
 }
@@ -1183,13 +1286,36 @@ function AgreementMetric({ label, value }: { label: string; value: string }) {
   );
 }
 
+function AgreementApprovalStatus({
+  label,
+  value,
+  status,
+}: {
+  label: string;
+  value?: string | null;
+  status?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-[#e7ece7] bg-white px-4 py-3">
+      <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-[#829087]">{label}</p>
+      <p className="mt-1 text-[11px] text-[#31483a]">
+        {value
+          ? new Date(value).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })
+          : status === "DRAFT" ? "Awaiting approval" : "Not recorded for this agreement"}
+      </p>
+    </div>
+  );
+}
+
 function AgreementStatusBadge({ status }: { status: AgreementStatus | null }) {
   const colorClass = status === "Expired"
     ? "bg-[#fff0ee] text-[#a8322a]"
     : status === "Expiring soon"
       ? "bg-[#fff7e8] text-[#9a6500]"
-      : status === "Active"
+      : status === "Active" || status === "Approved"
         ? "bg-[#eaf5ed] text-[#286244]"
+        : status === "Awaiting owner approval" || status === "Awaiting tenant approval"
+          ? "bg-[#fff7e8] text-[#9a6500]"
         : "bg-[#f1f4f1] text-[#849188]";
 
   return (

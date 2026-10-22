@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/database";
 import { createDevBuilding, listDevBuildings } from "@/lib/dev-store";
 import { getAdminSession } from "@/lib/session";
+import { shouldUseDatabase } from "@/lib/storage-mode";
 
 const fields = [
   "name",
@@ -30,7 +31,7 @@ export async function GET() {
     return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   }
 
-  if (process.env.NODE_ENV !== "production") {
+  if (!shouldUseDatabase()) {
     try {
       return NextResponse.json({ buildings: await listDevBuildings() });
     } catch (error) {
@@ -88,7 +89,7 @@ export async function POST(request: Request) {
   values.ownerMobile =
     ownerMobileDigits.length === 10 ? `91${ownerMobileDigits}` : ownerMobileDigits;
 
-  if (process.env.NODE_ENV !== "production") {
+  if (!shouldUseDatabase()) {
     try {
       const building = await createDevBuilding(values);
       return NextResponse.json({ building }, { status: 201 });

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/database";
 import { listDevAdminAccounts, setDevOwnerPassword, setDevTenantPassword } from "@/lib/dev-store";
 import { hashPassword } from "@/lib/password";
 import { getAdminSession } from "@/lib/session";
+import { shouldUseDatabase } from "@/lib/storage-mode";
 
 type AccountType = "OWNER" | "TENANT";
 
@@ -12,7 +13,7 @@ export async function GET() {
   }
 
   try {
-    if (process.env.NODE_ENV !== "production") {
+    if (!shouldUseDatabase()) {
       return NextResponse.json(await listDevAdminAccounts(), {
         headers: { "Cache-Control": "no-store" },
       });
@@ -87,7 +88,7 @@ export async function POST(request: Request) {
   try {
     const passwordHash = await hashPassword(body.password);
     let updated: boolean;
-    if (process.env.NODE_ENV !== "production") {
+    if (!shouldUseDatabase()) {
       updated =
         accountType === "OWNER"
           ? await setDevOwnerPassword(mobileNumber, passwordHash)

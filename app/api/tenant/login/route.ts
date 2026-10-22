@@ -3,6 +3,7 @@ import { getDevTenantMobile } from "@/lib/dev-store";
 import { prisma } from "@/lib/database";
 import { verifyPassword } from "@/lib/password";
 import { createSessionToken, SESSION_COOKIE } from "@/lib/session";
+import { shouldUseDatabase } from "@/lib/storage-mode";
 
 type LoginBody = {
   mobileNumber: string;
@@ -44,7 +45,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Enter your password." }, { status: 400 });
     }
   } else {
-    if (process.env.NODE_ENV === "production") {
+    if (shouldUseDatabase()) {
       return NextResponse.json(
         { error: "OTP sign-in is unavailable until a real OTP provider is configured." },
         { status: 503 },
@@ -56,7 +57,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const tenant = process.env.NODE_ENV !== "production"
+    const tenant = !shouldUseDatabase()
       ? await getDevTenantMobile(mobileNumber)
       : await prisma.tenant.findUnique({
           where: { mobileNumber },

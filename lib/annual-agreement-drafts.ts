@@ -58,6 +58,7 @@ export async function generateAnnualAgreementDrafts(now = new Date()) {
         monthlyRent: asset.monthlyRent,
         securityDeposit: asset.securityDeposit,
         terms: "",
+        importantTerms: "",
         status: "DRAFT",
       }];
     });

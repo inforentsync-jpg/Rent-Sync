@@ -3,6 +3,7 @@ import { prisma } from "@/lib/database";
 import { getDevOwnerAgreement } from "@/lib/dev-store";
 import { generateAgreementPdf } from "@/lib/agreement-pdf";
 import { getOwnerSession } from "@/lib/session";
+import { shouldUseDatabase } from "@/lib/storage-mode";
 
 function dateOnly(value: Date | string) {
   return value instanceof Date ? value.toISOString().slice(0, 10) : value.slice(0, 10);
@@ -19,7 +20,7 @@ export async function GET(
   const { id } = await params;
 
   try {
-    const record = process.env.NODE_ENV !== "production"
+    const record = !shouldUseDatabase()
       ? await getDevOwnerAgreement(session.mobileNumber, id)
       : await (async () => {
           const owner = await prisma.propertyOwner.findUnique({
