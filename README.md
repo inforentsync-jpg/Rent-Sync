@@ -29,3 +29,5 @@ Open [http://localhost:3000](http://localhost:3000).
 Import `Jassimtkd/Rent-Sync` into Vercel and add `DATABASE_URL` and a strong `AUTH_SECRET` to the Preview and Production environments. Use a separate PostgreSQL database for Preview and Production. Before deploying, run `npm run db:migrate:deploy` against each target database. Admin sign-in is intentionally disabled in production until a real OTP provider is implemented.
 
 Owner registration and tenant sign-in are shown as public entry points, but their account and lease workflows are intentionally not enabled in this first milestone.
+
+After owner registration, open `/owner/profile` to update the profile name and email and view the mobile number and account creation date. `/owner/profle` redirects to the profile page for compatibility. The development profile shows the test OTP (`1234`); owner password sign-in is not enabled.

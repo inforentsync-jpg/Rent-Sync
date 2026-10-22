@@ -21,6 +21,7 @@ export type DevOwner = {
   id: string;
   fullName: string;
   mobileNumber: string;
+  email?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -230,6 +231,22 @@ export function getDevOwner(mobileNumber: string) {
   return withStore(async (store) =>
     store.owners.find((entry) => entry.mobileNumber === mobileNumber) ?? null,
   );
+}
+
+export function updateDevOwnerProfile(
+  mobileNumber: string,
+  fullName: string,
+  email: string | null,
+) {
+  return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === mobileNumber);
+    if (!owner) return null;
+    owner.fullName = fullName;
+    owner.email = email;
+    owner.updatedAt = new Date().toISOString();
+    await writeStore(store);
+    return owner;
+  });
 }
 
 export function getDevOwnerPortfolio(mobileNumber: string) {

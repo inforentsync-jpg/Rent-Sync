@@ -34,6 +34,7 @@ model PropertyOwner {
   id           String     @id @default(cuid())
   fullName     String     @db.VarChar(120)
   mobileNumber String     @unique @db.VarChar(15)
+  email        String?    @db.VarChar(254)
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
   buildings    Building[]
