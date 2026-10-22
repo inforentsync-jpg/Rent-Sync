@@ -1,17 +1,17 @@
 import { NextResponse } from "next/server";
 import { getDevTenantMobile } from "@/lib/dev-store";
 import { prisma } from "@/lib/database";
+import { verifyPassword } from "@/lib/password";
 import { createSessionToken, SESSION_COOKIE } from "@/lib/session";
 
-export async function POST(request: Request) {
-  const runtimeEnvironment: string = process.env.NODE_ENV;
-  if (runtimeEnvironment === "production") {
-    return NextResponse.json(
-      { error: "Test OTP login is disabled in production." },
-      { status: 503 },
-    );
-  }
+type LoginBody = {
+  mobileNumber: string;
+  method: "otp" | "password";
+  otp?: string;
+  password?: string;
+};
 
+export async function POST(request: Request) {
   let body: unknown;
   try {
     body = await request.json();
@@ -24,28 +24,58 @@ export async function POST(request: Request) {
     typeof body !== "object" ||
     !("mobileNumber" in body) ||
     typeof body.mobileNumber !== "string" ||
-    !("otp" in body) ||
-    typeof body.otp !== "string"
+    !("method" in body) ||
+    (body.method !== "otp" && body.method !== "password") ||
+    ("otp" in body && body.otp !== undefined && typeof body.otp !== "string") ||
+    ("password" in body && body.password !== undefined && typeof body.password !== "string")
   ) {
-    return NextResponse.json({ error: "Mobile number and OTP are required." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Mobile number and a valid sign-in method are required." },
+      { status: 400 },
+    );
   }
-  const mobileNumber = body.mobileNumber.replace(/\D/g, "");
+  const loginBody = body as LoginBody;
+  const mobileNumber = loginBody.mobileNumber.replace(/\D/g, "");
   if (!/^\d{10,15}$/.test(mobileNumber)) {
     return NextResponse.json({ error: "Enter a valid mobile number." }, { status: 400 });
   }
-  if (body.otp !== "1234") {
-    return NextResponse.json({ error: "Incorrect test OTP. Use 1234." }, { status: 401 });
+  if (loginBody.method === "password") {
+    if (!loginBody.password || loginBody.password.length > 128) {
+      return NextResponse.json({ error: "Enter your password." }, { status: 400 });
+    }
+  } else {
+    if (process.env.NODE_ENV === "production") {
+      return NextResponse.json(
+        { error: "OTP sign-in is unavailable until a real OTP provider is configured." },
+        { status: 503 },
+      );
+    }
+    if (loginBody.otp !== "1234") {
+      return NextResponse.json({ error: "Incorrect development OTP. Use 1234." }, { status: 401 });
+    }
   }
 
   try {
     const tenant = process.env.NODE_ENV !== "production"
       ? await getDevTenantMobile(mobileNumber)
-      : await prisma.tenant.findUnique({ where: { mobileNumber }, select: { id: true } });
+      : await prisma.tenant.findUnique({
+          where: { mobileNumber },
+          select: { id: true, passwordHash: true },
+        });
     if (!tenant) {
       return NextResponse.json(
         { error: "This mobile is not registered as a tenant. Ask the property owner to add you." },
         { status: 404 },
       );
+    }
+    if (
+      loginBody.method === "password" &&
+      !(await verifyPassword(
+        loginBody.password!,
+        "passwordHash" in tenant ? tenant.passwordHash ?? null : null,
+      ))
+    ) {
+      return NextResponse.json({ error: "Incorrect mobile number or password." }, { status: 401 });
     }
   } catch (error) {
     console.error("Unable to find tenant for mobile login.", error);

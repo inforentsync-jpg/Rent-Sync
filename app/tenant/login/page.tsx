@@ -14,7 +14,7 @@ export default async function TenantLoginPage() {
         <p className="mt-6 text-[11px] font-bold uppercase tracking-[0.15em] text-[#6b8a76]">Tenant portal</p>
         <h1 className="mt-2 text-[29px] font-semibold tracking-[-0.05em] text-[#17251d]">Welcome home.</h1>
         <p className="mt-3 text-[13px] leading-6 text-[#79867e]">Sign in with the same mobile number your property owner registered.</p>
-        <TenantLoginForm />
+        <TenantLoginForm otpEnabled={process.env.NODE_ENV !== "production"} />
         <Link href="/#login" className="mt-5 block text-center text-[11px] font-semibold text-[#176b4b] hover:underline">Return to home</Link>
       </section>
     </main>

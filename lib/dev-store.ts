@@ -56,6 +56,7 @@ export type DevTenant = {
   ownerId: string;
   fullName: string;
   mobileNumber: string | null;
+  passwordHash?: string | null;
   assetIds: string[];
   createdAt: string;
   updatedAt: string;
@@ -250,6 +251,17 @@ export function setDevOwnerPassword(mobileNumber: string, passwordHash: string) 
   });
 }
 
+export function setDevTenantPassword(mobileNumber: string, passwordHash: string) {
+  return withStore(async (store) => {
+    const tenant = store.tenants.find((entry) => entry.mobileNumber === mobileNumber);
+    if (!tenant) return false;
+    tenant.passwordHash = passwordHash;
+    tenant.updatedAt = new Date().toISOString();
+    await writeStore(store);
+    return true;
+  });
+}
+
 export function createDevBuilding(input: BuildingInput) {
   return withStore(async (store) => {
     const now = new Date().toISOString();
@@ -297,6 +309,28 @@ export function getDevOwner(mobileNumber: string) {
   return withStore(async (store) =>
     store.owners.find((entry) => entry.mobileNumber === mobileNumber) ?? null,
   );
+}
+
+export function listDevAdminAccounts() {
+  return withStore(async (store) => ({
+    owners: store.owners.map(({ id, fullName, mobileNumber, createdAt }) => ({
+      id,
+      fullName,
+      mobileNumber,
+      createdAt,
+    })),
+    tenants: store.tenants
+      .filter(
+        (tenant): tenant is DevTenant & { mobileNumber: string } =>
+          typeof tenant.mobileNumber === "string" && tenant.mobileNumber.length > 0,
+      )
+      .map(({ id, fullName, mobileNumber, createdAt }) => ({
+        id,
+        fullName,
+        mobileNumber,
+        createdAt,
+      })),
+  }));
 }
 
 export function updateDevOwnerProfile(
@@ -676,6 +710,13 @@ export function getDevTenantMobile(mobileNumber: string) {
   return withStore(async (store) =>
     store.tenants.find((entry) => entry.mobileNumber === mobileNumber) ?? null,
   );
+}
+
+export function getDevTenantPasswordHash(mobileNumber: string) {
+  return withStore(async (store) => {
+    const tenant = store.tenants.find((entry) => entry.mobileNumber === mobileNumber);
+    return tenant?.passwordHash ?? null;
+  });
 }
 
 export function getDevTenantPortal(mobileNumber: string) {
