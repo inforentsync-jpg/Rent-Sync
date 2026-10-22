@@ -71,7 +71,10 @@ export async function POST(request: Request) {
     );
   }
 
-  const result = NextResponse.json({ success: true });
+  const result = NextResponse.json({
+    success: true,
+    ...(request.headers.get("x-rent-sync-client") === "mobile" ? { token } : {}),
+  });
   result.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",

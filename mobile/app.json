@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "Rent-Sync",
+    "slug": "rent-sync",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/rent-sync-icon.png",
+    "scheme": "rentsync",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "bundleIdentifier": "com.inforentsync.rentsync"
+    },
+    "android": {
+      "package": "com.inforentsync.rentsync",
+      "adaptiveIcon": {
+        "backgroundColor": "#102E25",
+        "foregroundImage": "./assets/images/rent-sync-foreground.png",
+        "monochromeImage": "./assets/images/rent-sync-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "server",
+      "favicon": "./assets/images/rent-sync-icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#102E25",
+          "image": "./assets/images/rent-sync-splash.png",
+          "imageWidth": 136
+        }
+      ],
+      "expo-secure-store",
+      "expo-sharing"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

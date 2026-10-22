@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 
 export const SESSION_COOKIE = "rent_sync_session";
 const SESSION_DURATION_SECONDS = 60 * 60 * 24 * 7;
@@ -67,19 +67,23 @@ export function verifySessionToken(token: string | undefined): SessionPayload | 
 }
 
 export async function getAdminSession() {
-  const cookieStore = await cookies();
-  const session = verifySessionToken(cookieStore.get(SESSION_COOKIE)?.value);
+  const session = await getSession();
   return session?.role === "SUPER_ADMIN" ? session : null;
 }
 
 export async function getOwnerSession() {
-  const cookieStore = await cookies();
-  const session = verifySessionToken(cookieStore.get(SESSION_COOKIE)?.value);
+  const session = await getSession();
   return session?.role === "OWNER" ? session : null;
 }
 
 export async function getTenantSession() {
-  const cookieStore = await cookies();
-  const session = verifySessionToken(cookieStore.get(SESSION_COOKIE)?.value);
+  const session = await getSession();
   return session?.role === "TENANT" ? session : null;
+}
+
+async function getSession() {
+  const [cookieStore, requestHeaders] = await Promise.all([cookies(), headers()]);
+  const authorization = requestHeaders.get("authorization");
+  const bearerToken = authorization?.match(/^Bearer\s+(\S+)$/i)?.[1];
+  return verifySessionToken(bearerToken ?? cookieStore.get(SESSION_COOKIE)?.value);
 }

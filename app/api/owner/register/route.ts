@@ -101,7 +101,10 @@ export async function POST(request: Request) {
     );
   }
 
-  const response = NextResponse.json({ success: true });
+  const response = NextResponse.json({
+    success: true,
+    ...(request.headers.get("x-rent-sync-client") === "mobile" ? { token } : {}),
+  });
   response.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
