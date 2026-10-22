@@ -4,9 +4,15 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, LoaderCircle } from "lucide-react";
 
-export default function DevOtpLogin({ enabled }: { enabled: boolean }) {
+export default function DevOtpLogin({
+  enabled,
+  defaultMobile = "9567048809",
+}: {
+  enabled: boolean;
+  defaultMobile?: string;
+}) {
   const router = useRouter();
-  const [mobile, setMobile] = useState("9567048809");
+  const [mobile, setMobile] = useState(defaultMobile);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { addElevenMonthTerm } from "@/lib/rental-agreement";
-import { getUpcomingAgreementTerm } from "@/lib/agreement-year";
+import { getRenewalAgreementTerm } from "@/lib/agreement-year";
 
 export type DevBuilding = {
   id: string;
@@ -502,6 +502,7 @@ export function createDevTenant(
   assetId: string,
   fullName: string,
   mobileNumber: string | null,
+  startDate: string,
 ) {
   return withStore(async (store) => {
     const owner = store.owners.find((entry) => entry.mobileNumber === ownerMobile);
@@ -510,6 +511,8 @@ export function createDevTenant(
     if (!owner || !asset || !building || building.ownerId !== owner.id) {
       throw new Error("Asset not found in your account.");
     }
+    const endDate = addElevenMonthTerm(startDate);
+    if (!endDate) throw new Error("Choose a valid agreement start date.");
     let tenant = mobileNumber
       ? store.tenants.find((entry) => entry.mobileNumber === mobileNumber)
       : store.tenants.find(
@@ -536,7 +539,67 @@ export function createDevTenant(
       tenant.fullName = fullName;
       tenant.updatedAt = now;
     }
+    const agreementYear = Number(startDate.slice(0, 4));
+    if (
+      store.agreements.some(
+        (agreement) =>
+          agreement.assetId === asset.id &&
+          agreement.tenantId === tenant.id &&
+          agreement.agreementYear === agreementYear,
+      )
+    ) {
+      throw new DevAgreementConflictError(
+        "An agreement already exists for this tenant, asset, and year.",
+      );
+    }
+    if (
+      store.agreements.some((agreement) =>
+        agreementOverlaps(agreement, asset.id, startDate, endDate),
+      )
+    ) {
+      throw new DevAgreementConflictError("This asset already has an agreement for those dates.");
+    }
     if (!tenant.assetIds.includes(asset.id)) tenant.assetIds.push(asset.id);
+    const initialAgreement: DevAgreement = {
+      id: randomUUID(),
+      agreementNumber: `RS-${agreementYear}-${randomUUID().slice(0, 8).toUpperCase()}`,
+      assetId: asset.id,
+      tenantId: tenant.id,
+      startDate,
+      endDate,
+      monthlyRent: asset.monthlyRent,
+      securityDeposit: asset.securityDeposit,
+      terms: "",
+      status: "DRAFT",
+      agreementYear,
+      createdAt: now,
+    };
+    store.agreements.unshift(initialAgreement);
+    const renewalTerm = getRenewalAgreementTerm(startDate, endDate);
+    if (
+      renewalTerm &&
+      !store.agreements.some(
+        (agreement) =>
+          agreement.assetId === asset.id &&
+          agreement.tenantId === tenant.id &&
+          agreement.agreementYear === renewalTerm.year,
+      )
+    ) {
+      store.agreements.unshift({
+        id: randomUUID(),
+        agreementNumber: `RS-${renewalTerm.year}-${randomUUID().slice(0, 8).toUpperCase()}`,
+        assetId: asset.id,
+        tenantId: tenant.id,
+        startDate: renewalTerm.startDate,
+        endDate: renewalTerm.endDate,
+        monthlyRent: asset.monthlyRent,
+        securityDeposit: asset.securityDeposit,
+        terms: "",
+        status: "DRAFT",
+        agreementYear: renewalTerm.year,
+        createdAt: now,
+      });
+    }
     await writeStore(store);
     return tenant;
   });
@@ -626,7 +689,6 @@ export function generateDevAnnualAgreementDrafts(mobileNumber: string, now = new
   return withStore(async (store) => {
     const owner = store.owners.find((entry) => entry.mobileNumber === mobileNumber);
     if (!owner) return 0;
-    const term = getUpcomingAgreementTerm(now);
 
     const ownerCompanies = new Set(
       store.companies.filter((entry) => entry.ownerId === owner.id).map((entry) => entry.id),
@@ -656,13 +718,22 @@ export function generateDevAnnualAgreementDrafts(mobileNumber: string, now = new
       if (!asset) continue;
       const tenants = ownerTenants.filter((tenant) => tenant.assetIds.includes(assetId));
       for (const tenant of tenants) {
-        if (
-          store.agreements.some(
+        const tenantAgreements = store.agreements
+          .filter(
             (agreement) =>
-              agreement.assetId === assetId &&
-              agreement.tenantId === tenant.id &&
-              agreement.agreementYear === term.year,
+              agreement.assetId === assetId && agreement.tenantId === tenant.id,
           )
+          .sort((a, b) => b.startDate.localeCompare(a.startDate));
+        const latestAgreement = tenantAgreements[0];
+        if (!latestAgreement) continue;
+        const term = getRenewalAgreementTerm(
+          latestAgreement.startDate,
+          latestAgreement.endDate,
+          now,
+        );
+        if (!term) continue;
+        if (
+          tenantAgreements.some((agreement) => agreement.agreementYear === term.year)
         ) {
           continue;
         }

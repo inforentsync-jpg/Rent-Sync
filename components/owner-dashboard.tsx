@@ -119,6 +119,13 @@ const formLabels: Record<FormKind, string> = {
   agreement: "Add rental agreement",
 };
 
+function getLocalDateInputValue() {
+  const today = new Date();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${today.getFullYear()}-${month}-${day}`;
+}
+
 export default function OwnerDashboard() {
   const router = useRouter();
   const routeState = useSyncExternalStore(
@@ -201,8 +208,13 @@ export default function OwnerDashboard() {
       : kind === "asset" && portfolio.buildings.length === 1
         ? { buildingId: portfolio.buildings[0].id }
         : kind === "tenant" && portfolio.assets.length === 1
-          ? { assetId: portfolio.assets[0].id }
-          : {});
+        ? {
+            assetId: portfolio.assets[0].id,
+            startDate: getLocalDateInputValue(),
+          }
+        : kind === "tenant"
+          ? { startDate: getLocalDateInputValue() }
+        : {});
     setFormError("");
   }
 
@@ -1101,7 +1113,9 @@ export default function OwnerDashboard() {
                 <SelectField label="Asset" name="assetId" value={form.assetId ?? ""} options={portfolio.assets.map((entry) => [`${entry.id}`, `${entry.name} · ${entry.unitNumber}`])} setForm={setForm} />
                 <TextField label="Tenant full name" name="fullName" value={form.fullName ?? ""} placeholder="Tenant's full name" setForm={setForm} />
                 <TextField label="Tenant mobile (optional)" name="mobileNumber" value={form.mobileNumber ?? ""} placeholder="919876543210" type="tel" required={false} setForm={setForm} />
+                <TextField label="Agreement start date" name="startDate" value={form.startDate ?? ""} placeholder="" type="date" setForm={setForm} />
                 <p className="mt-3 text-[10px] text-[#849188]">Tenants without a mobile number can be recorded, but cannot sign in until one is added.</p>
+                <p className="mt-2 text-[10px] text-[#849188]">An unsigned 11-month agreement draft will be created for this start year.</p>
               </>}
               {formKind === "agreement" && <>
                 <label className="block text-[10px] font-semibold text-[#465a4c]">Asset<select required value={form.assetId ?? ""} onChange={(event) => setForm((current) => ({ ...current, assetId: event.target.value, tenantId: "" }))} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[11px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]"><option value="">Select asset</option>{portfolio.assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name} · {asset.unitNumber}</option>)}</select></label>

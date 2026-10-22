@@ -13,10 +13,13 @@ import {
   updateDevAsset,
 } from "@/lib/dev-store";
 import { getOwnerSession } from "@/lib/session";
-import { hasValidElevenMonthTerm } from "@/lib/rental-agreement";
+import { addElevenMonthTerm, hasValidElevenMonthTerm } from "@/lib/rental-agreement";
+import { getRenewalAgreementTerm } from "@/lib/agreement-year";
 import { generateAnnualAgreementDrafts } from "@/lib/annual-agreement-drafts";
 
 type PortfolioInput = Record<string, unknown>;
+
+class PortfolioConflictError extends Error {}
 
 function isRecord(value: unknown): value is PortfolioInput {
   return value !== null && typeof value === "object";
@@ -377,14 +380,16 @@ export async function POST(request: Request) {
         const fullName = text(body, "fullName", 120);
         const rawMobile = text(body, "mobileNumber", 20);
         const mobileNumber = rawMobile?.replace(/\D/g, "");
-        if (!assetId || !fullName || (mobileNumber && !/^\d{10,15}$/.test(mobileNumber))) {
-          return NextResponse.json({ error: "Enter the tenant name and asset. If provided, the mobile number must be valid." }, { status: 400 });
+        const startDate = text(body, "startDate", 10);
+        if (!assetId || !fullName || !startDate || !addElevenMonthTerm(startDate) || (mobileNumber && !/^\d{10,15}$/.test(mobileNumber))) {
+          return NextResponse.json({ error: "Enter the tenant name, asset, and a valid agreement start date. If provided, the mobile number must be valid." }, { status: 400 });
         }
         const tenant = await createDevTenant(
           session.mobileNumber,
           assetId,
           fullName,
           mobileNumber ?? null,
+          startDate,
         );
         return NextResponse.json({ tenant }, { status: 201 });
       }
@@ -458,32 +463,121 @@ export async function POST(request: Request) {
       const fullName = text(body, "fullName", 120);
       const rawMobile = text(body, "mobileNumber", 20);
       const mobileNumber = rawMobile?.replace(/\D/g, "");
-      if (!assetId || !fullName || (mobileNumber && !/^\d{10,15}$/.test(mobileNumber))) {
-        return NextResponse.json({ error: "Enter the tenant name and asset. If provided, the mobile number must be valid." }, { status: 400 });
+      const startDate = text(body, "startDate", 10);
+      const endDate = startDate ? addElevenMonthTerm(startDate) : null;
+      if (!assetId || !fullName || !startDate || !endDate || (mobileNumber && !/^\d{10,15}$/.test(mobileNumber))) {
+        return NextResponse.json({ error: "Enter the tenant name, asset, and a valid agreement start date. If provided, the mobile number must be valid." }, { status: 400 });
       }
       const asset = await prisma.asset.findFirst({
         where: { id: assetId, building: { ownerId: owner.id } },
       });
       if (!asset) return NextResponse.json({ error: "Asset not found in your account." }, { status: 404 });
-      const tenant = mobileNumber
-        ? await prisma.tenant.upsert({
-            where: { mobileNumber },
-            update: { fullName },
-            create: { ownerId: owner.id, fullName, mobileNumber },
-          })
-        : await prisma.tenant.create({
-            data: { ownerId: owner.id, fullName },
+      const startsAt = new Date(`${startDate}T00:00:00.000Z`);
+      const endsAt = new Date(`${endDate}T00:00:00.000Z`);
+      const agreementYear = Number(startDate.slice(0, 4));
+      const result = await prisma.$transaction(async (transaction) => {
+        const existingTenant = mobileNumber
+          ? await transaction.tenant.findUnique({ where: { mobileNumber } })
+          : null;
+        if (existingTenant && existingTenant.ownerId !== owner.id) {
+          throw new PortfolioConflictError("This mobile number is already registered with a different owner.");
+        }
+        const tenant = existingTenant
+          ? await transaction.tenant.update({
+              where: { id: existingTenant.id },
+              data: { fullName },
+            })
+          : await transaction.tenant.create({
+              data: { ownerId: owner.id, fullName, mobileNumber },
+            });
+        const existingAgreement = await transaction.rentalAgreement.findFirst({
+          where: { assetId, tenantId: tenant.id, agreementYear },
+          select: { id: true },
+        });
+        if (existingAgreement) {
+          throw new PortfolioConflictError("An agreement already exists for this tenant, asset, and year.");
+        }
+        const overlappingAgreement = await transaction.rentalAgreement.findFirst({
+          where: {
+            assetId,
+            status: "ACTIVE",
+            startDate: { lte: endsAt },
+            endDate: { gte: startsAt },
+          },
+          select: { id: true },
+        });
+        if (overlappingAgreement) {
+          throw new PortfolioConflictError("This asset already has an agreement for those dates.");
+        }
+        await transaction.assetTenant.upsert({
+          where: { assetId_tenantId: { assetId, tenantId: tenant.id } },
+          update: {},
+          create: { assetId, tenantId: tenant.id },
+        });
+        const agreement = await transaction.rentalAgreement.create({
+          data: {
+            agreementNumber: `RS-${agreementYear}-${randomUUID().slice(0, 8).toUpperCase()}`,
+            assetId,
+            tenantId: tenant.id,
+            agreementYear,
+            startDate: startsAt,
+            endDate: endsAt,
+            monthlyRent: asset.monthlyRent,
+            securityDeposit: asset.securityDeposit,
+            terms: "",
+            status: "DRAFT",
+          },
+        });
+        let renewalAgreement = null;
+        const renewalTerm = getRenewalAgreementTerm(startDate, endDate);
+        if (renewalTerm) {
+          const existingRenewal = await transaction.rentalAgreement.findFirst({
+            where: {
+              assetId,
+              tenantId: tenant.id,
+              agreementYear: renewalTerm.year,
+            },
+            select: { id: true },
           });
-      await prisma.assetTenant.upsert({
-        where: { assetId_tenantId: { assetId, tenantId: tenant.id } },
-        update: {},
-        create: { assetId, tenantId: tenant.id },
+          if (!existingRenewal) {
+            renewalAgreement = await transaction.rentalAgreement.create({
+              data: {
+                agreementNumber: `RS-${renewalTerm.year}-${randomUUID().slice(0, 8).toUpperCase()}`,
+                assetId,
+                tenantId: tenant.id,
+                agreementYear: renewalTerm.year,
+                startDate: new Date(`${renewalTerm.startDate}T00:00:00.000Z`),
+                endDate: new Date(`${renewalTerm.endDate}T00:00:00.000Z`),
+                monthlyRent: asset.monthlyRent,
+                securityDeposit: asset.securityDeposit,
+                terms: "",
+                status: "DRAFT",
+              },
+            });
+          }
+        }
+        return { tenant, agreement, renewalAgreement };
       });
-      return NextResponse.json({ tenant }, { status: 201 });
+      return NextResponse.json(result, { status: 201 });
     }
 
     return NextResponse.json({ error: "Unknown portfolio item type." }, { status: 400 });
   } catch (error) {
+    if (error instanceof PortfolioConflictError) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    }
+    if (
+      kind === "tenant" &&
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "P2002"
+    ) {
+      return NextResponse.json(
+        { error: "An agreement already exists for this tenant, asset, and year." },
+        { status: 409 },
+      );
+    }
     console.error("Unable to save database owner portfolio item.", error);
     return NextResponse.json(
       { error: "Unable to save item. Check the database connection and migrations." },

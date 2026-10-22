@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/database";
-import { getUpcomingAgreementTerm } from "@/lib/agreement-year";
+import { getRenewalAgreementTerm } from "@/lib/agreement-year";
 
 export async function generateAnnualAgreementDrafts(now = new Date()) {
-  const term = getUpcomingAgreementTerm(now);
   const assets = await prisma.asset.findMany({
     select: {
       id: true,
@@ -22,24 +21,31 @@ export async function generateAnnualAgreementDrafts(now = new Date()) {
         },
       },
       agreements: {
-        where: { agreementYear: term.year },
-        select: { tenantId: true },
+        select: {
+          tenantId: true,
+          agreementYear: true,
+          startDate: true,
+          endDate: true,
+        },
       },
     },
   });
 
-  const existingPairs = new Set(
-    assets.flatMap((asset) =>
-      asset.agreements.map((agreement) => `${asset.id}:${agreement.tenantId}`),
-    ),
-  );
   const draftData = assets.flatMap((asset) => {
     const propertyOwnerId = asset.building.company?.ownerId ?? asset.building.ownerId;
     return asset.tenants.flatMap((assignment) => {
-      if (
-        assignment.tenant.ownerId !== propertyOwnerId ||
-        existingPairs.has(`${asset.id}:${assignment.tenantId}`)
-      ) {
+      if (assignment.tenant.ownerId !== propertyOwnerId) return [];
+      const tenantAgreements = asset.agreements
+        .filter((agreement) => agreement.tenantId === assignment.tenantId)
+        .sort((a, b) => b.startDate.getTime() - a.startDate.getTime());
+      const latestAgreement = tenantAgreements[0];
+      if (!latestAgreement) return [];
+      const term = getRenewalAgreementTerm(
+        latestAgreement.startDate.toISOString().slice(0, 10),
+        latestAgreement.endDate.toISOString().slice(0, 10),
+        now,
+      );
+      if (!term || tenantAgreements.some((agreement) => agreement.agreementYear === term.year)) {
         return [];
       }
       return [{

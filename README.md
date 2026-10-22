@@ -1,6 +1,6 @@
 # Rent-Sync
 
-Rent-Sync is a mobile-first rent and rental-agreement management app. This first milestone includes public entry points, development-only admin sign-in, a protected admin dashboard, and building records with owner contact details.
+Rent-Sync is a mobile-first rent and rental-agreement management app with Owner and Tenant sign-in and a protected platform administrator dashboard.
 
 ## Local setup
 
@@ -30,8 +30,10 @@ Open [http://localhost:3000](http://localhost:3000).
 
 Connect the GitHub repository to Vercel and add `DATABASE_URL`, a strong `AUTH_SECRET`, `SUPER_ADMIN_MOBILE_NUMBER`, `SUPER_ADMIN_PASSWORD`, and a random `CRON_SECRET` to the Production environment. Use a separate PostgreSQL database for Preview and Production. Each push to the connected deployment branch triggers a Vercel deployment. Before deploying, run `npm run db:migrate:deploy` against each target database. Owner OTP sign-in is disabled in production until a real OTP provider is implemented; owners sign in using their mobile number and password.
 
-Owner registration, owner profiles, and tenant sign-in are available. Tenants can sign in with a password set by the super administrator; the development-only OTP remains available for local testing. Tenant agreement creation uses the development test flow and is disabled in production until a complete signing workflow is implemented.
+Owner registration, owner profiles, and tenant sign-in are available. Tenants can sign in with a password set by the super administrator; the development-only OTP remains available for local testing. Owners can add a tenant and generate an unsigned draft agreement; tenant signing remains disabled in production until a complete signing workflow is implemented.
 
 After owner registration, open `/owner/profile` to update the profile name and email, configure or change a password, and view the mobile number and account creation date. `/owner/profle` redirects to the profile page for compatibility. The super-admin dashboard at `/admin` contains only Owners and Tenants modules; either module lets the super administrator reset that account's password. Owner and tenant passwords are stored as scrypt hashes. Owner sign-in is available at `/owner/login`.
 
-The owner portfolio and a daily 03:00 UTC Vercel cron create missing unsigned drafts for the upcoming calendar year for each assigned tenant and asset. The default term is January 1 through November 30 (11 months); November 31 is not a valid date. Drafts are not signed or activated. Each tenant, asset, and year combination is unique, and duplicate agreements are rejected. Agreement rows include a protected PDF download generated from the supplied rental-agreement template; unavailable personal details are left blank or marked as not provided rather than copied from the template's sample data. The generated PDF uses the Noto Sans Malayalam font under the SIL Open Font License; the license is in `assets/fonts/OFL.txt`.
+When an owner adds a tenant, they choose the agreement start date. Rent-Sync creates an unsigned 11-month draft for that start year; drafts are not signed or activated. The owner portfolio and a daily 03:00 UTC Vercel cron create a draft for the following anniversary year once the latest agreement is expired or within two months of expiry. The renewal keeps the original start month and day (clamped to the last day of the month where needed). Each tenant, asset, and year combination is unique, and duplicate agreements are rejected. Agreement rows include a protected PDF download generated from the supplied rental-agreement template; unavailable personal details are left blank or marked as not provided rather than copied from the template's sample data. The generated PDF uses the Noto Sans Malayalam font under the SIL Open Font License; the license is in `assets/fonts/OFL.txt`.
+
+The public home page links to Owner and Tenant sign-in. Super-admin sign-in is available at `/platform`, and the protected Owners and Tenants dashboard is at `/admin`.
