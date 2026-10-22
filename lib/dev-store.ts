@@ -215,6 +215,41 @@ export function upsertDevOwner(fullName: string, mobileNumber: string) {
   });
 }
 
+export function createDevOwner(
+  fullName: string,
+  mobileNumber: string,
+  passwordHash: string,
+) {
+  return withStore(async (store) => {
+    if (store.owners.some((entry) => entry.mobileNumber === mobileNumber)) {
+      return null;
+    }
+    const now = new Date().toISOString();
+    const owner: DevOwner = {
+      id: randomUUID(),
+      fullName,
+      mobileNumber,
+      passwordHash,
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.owners.push(owner);
+    await writeStore(store);
+    return owner;
+  });
+}
+
+export function setDevOwnerPassword(mobileNumber: string, passwordHash: string) {
+  return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === mobileNumber);
+    if (!owner) return false;
+    owner.passwordHash = passwordHash;
+    owner.updatedAt = new Date().toISOString();
+    await writeStore(store);
+    return true;
+  });
+}
+
 export function createDevBuilding(input: BuildingInput) {
   return withStore(async (store) => {
     const now = new Date().toISOString();

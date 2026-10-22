@@ -53,15 +53,15 @@ export default function HomePage() {
 
         <div id="login" className="relative z-10 mx-auto w-full max-w-[500px] scroll-mt-6">
           <div className="absolute -right-5 -top-5 z-10 hidden rounded-2xl border border-[#e8eee9] bg-white px-4 py-3 shadow-xl shadow-[#143b2917] sm:block">
-            <div className="flex items-center gap-2 text-[11px] font-semibold text-[#51705e]"><ShieldCheck size={15} className="text-[#32825b]" /> Local admin preview</div>
+            <div className="flex items-center gap-2 text-[11px] font-semibold text-[#51705e]"><ShieldCheck size={15} className="text-[#32825b]" /> Super-admin access</div>
           </div>
           <div className="rounded-[28px] border border-white bg-white p-6 shadow-[0_25px_80px_-24px_rgba(21,57,39,0.19)] sm:p-8">
             <div className="mb-7">
               <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#6b8a76]">Welcome back</p>
               <h2 className="mt-2 text-[27px] font-semibold tracking-[-0.05em] text-[#17251d]">Sign in to your space</h2>
-              <p className="mt-2 text-[13px] leading-5 text-[#79867e]">Sign in to the local admin preview using the test mobile number and password.</p>
+              <p className="mt-2 text-[13px] leading-5 text-[#79867e]">Sign in with your configured super-admin mobile number and password.</p>
             </div>
-            <DevOtpLogin enabled={process.env.NODE_ENV !== "production"} />
+            <DevOtpLogin enabled={Boolean(process.env.SUPER_ADMIN_PASSWORD)} />
             <div className="my-6 flex items-center gap-3 text-[10px] font-medium uppercase tracking-[0.14em] text-[#9aa59e]">
               <span className="h-px flex-1 bg-[#edf0ed]" /> More ways to get started <span className="h-px flex-1 bg-[#edf0ed]" />
             </div>
@@ -80,7 +80,7 @@ export default function HomePage() {
             </div>
             <p className="mt-5 text-center text-[10px] leading-4 text-[#a0aaa3]">By continuing, you agree to the Rent-Sync terms and privacy policy.</p>
           </div>
-          <p className="mt-5 text-center text-[11px] text-[#89958d]">Local testing login is for the super administrator only.</p>
+          <p className="mt-5 text-center text-[11px] text-[#89958d]">Admin access is for the super administrator only.</p>
         </div>
       </section>
 

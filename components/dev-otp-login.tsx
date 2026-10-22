@@ -17,7 +17,7 @@ export default function DevOtpLogin({ enabled }: { enabled: boolean }) {
       return;
     }
     if (!password) {
-      setMessage("Enter the test password.");
+      setMessage("Enter your password.");
       return;
     }
     setBusy(true);
@@ -40,7 +40,7 @@ export default function DevOtpLogin({ enabled }: { enabled: boolean }) {
   if (!enabled) {
     return (
       <p className="rounded-lg bg-[#fff4ed] px-3 py-2 text-[11px] leading-4 text-[#995634]">
-        Admin sign-in is disabled in production until a real OTP provider is configured.
+        Super-admin sign-in is not configured. Set the required deployment secrets.
       </p>
     );
   }
@@ -62,14 +62,13 @@ export default function DevOtpLogin({ enabled }: { enabled: boolean }) {
         />
       </div>
       <div className="mt-4">
-        <label htmlFor="password" className="mb-2 block text-[11px] font-semibold text-[#44574b]">Test password</label>
+        <label htmlFor="password" className="mb-2 block text-[11px] font-semibold text-[#44574b]">Password</label>
         <input
           id="password"
           type="password"
           autoComplete="current-password"
-          inputMode="numeric"
-          maxLength={32}
-          placeholder="Enter 1234"
+          maxLength={128}
+          placeholder="Enter your password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           onKeyDown={(event) => {
@@ -90,10 +89,10 @@ export default function DevOtpLogin({ enabled }: { enabled: boolean }) {
         className="mt-4 flex h-[50px] w-full items-center justify-center gap-2 rounded-xl bg-[#176b4b] px-4 text-[13px] font-semibold text-white shadow-lg shadow-[#176b4b]/15 transition hover:bg-[#10583c] disabled:cursor-not-allowed disabled:opacity-60"
       >
         {busy ? <LoaderCircle size={16} className="animate-spin" /> : null}
-        {busy ? "Signing in..." : "Test admin sign in"}
+        {busy ? "Signing in..." : "Sign in as admin"}
         {!busy ? <ArrowRight size={15} /> : null}
       </button>
-      <p className="mt-3 text-[10px] text-[#a0aaa3]">Testing only: 9567048809 / 1234. This sign-in is disabled in production.</p>
+      <p className="mt-3 text-[10px] text-[#a0aaa3]">Super-admin credentials are verified on the server.</p>
     </div>
   );
 }

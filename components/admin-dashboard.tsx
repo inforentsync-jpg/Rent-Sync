@@ -8,6 +8,7 @@ import {
   CircleHelp,
   Clock3,
   Home,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -54,8 +55,14 @@ export default function AdminDashboard({ mobileNumber }: { mobileNumber: string 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [showOwnerPasswordForm, setShowOwnerPasswordForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
   const [formError, setFormError] = useState("");
+  const [ownerPasswordError, setOwnerPasswordError] = useState("");
+  const [ownerPasswordMessage, setOwnerPasswordMessage] = useState("");
+  const [ownerMobile, setOwnerMobile] = useState("");
+  const [ownerPassword, setOwnerPassword] = useState("");
   const [form, setForm] = useState(emptyForm);
   const [search, setSearch] = useState("");
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -114,6 +121,30 @@ export default function AdminDashboard({ mobileNumber }: { mobileNumber: string 
     }
   }
 
+  async function resetOwnerPassword(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setResettingPassword(true);
+    setOwnerPasswordError("");
+    setOwnerPasswordMessage("");
+    try {
+      const response = await fetch("/api/admin/owners/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mobileNumber: ownerMobile, password: ownerPassword }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to reset the owner password.");
+      setOwnerPassword("");
+      setOwnerPasswordMessage("Owner password reset successfully.");
+    } catch (cause) {
+      setOwnerPasswordError(
+        cause instanceof Error ? cause.message : "Unable to reset the owner password.",
+      );
+    } finally {
+      setResettingPassword(false);
+    }
+  }
+
   const visibleBuildings = buildings.filter((building) =>
     `${building.name} ${building.ownerName} ${building.city}`.toLowerCase().includes(search.toLowerCase()),
   );
@@ -143,7 +174,15 @@ export default function AdminDashboard({ mobileNumber }: { mobileNumber: string 
           <p className="px-3 text-[9px] font-bold uppercase tracking-[0.18em] text-white/40">Manage</p>
           <div className="mt-3 space-y-1">
             {navItems.map(({ title, icon: Icon, active }) => (
-              <button key={title} type="button" onClick={() => title === "Buildings" && document.getElementById("buildings")?.scrollIntoView({ behavior: "smooth" })} className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-[12px] font-medium transition ${active ? "bg-[#e9f3eb] text-[#154b34]" : "text-white/65 hover:bg-white/[0.07] hover:text-white"}`}>
+              <button key={title} type="button" onClick={() => {
+                if (title === "Buildings") {
+                  document.getElementById("buildings")?.scrollIntoView({ behavior: "smooth" });
+                } else if (title === "Owners") {
+                  setOwnerPasswordError("");
+                  setOwnerPasswordMessage("");
+                  setShowOwnerPasswordForm(true);
+                }
+              }} className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-[12px] font-medium transition ${active ? "bg-[#e9f3eb] text-[#154b34]" : "text-white/65 hover:bg-white/[0.07] hover:text-white"}`}>
                 <Icon size={16} strokeWidth={1.8} /> {title}
                 {title === "Buildings" && buildings.length > 0 ? <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[9px]">{buildings.length}</span> : null}
               </button>
@@ -283,6 +322,55 @@ export default function AdminDashboard({ mobileNumber }: { mobileNumber: string 
               <div className="mt-6 flex justify-end gap-2 border-t border-[#edf0ed] pt-4">
                 <button type="button" onClick={() => setShowForm(false)} className="h-10 rounded-lg border border-[#e3e9e4] px-4 text-[11px] font-semibold text-[#58695e] hover:bg-[#f7f9f7]">Cancel</button>
                 <button type="submit" disabled={saving} className="flex h-10 items-center gap-2 rounded-lg bg-[#176b4b] px-4 text-[11px] font-semibold text-white transition hover:bg-[#10583c] disabled:opacity-60">{saving ? "Saving..." : "Save building"} <Plus size={13} /></button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
+      {showOwnerPasswordForm ? (
+        <div className="fixed inset-0 z-40 grid place-items-center overflow-y-auto bg-[#10281c]/45 p-4 backdrop-blur-[2px]">
+          <section role="dialog" aria-modal="true" aria-labelledby="owner-password-title" className="my-auto w-full max-w-[460px] rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[#edf0ed] px-6 py-5">
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#6b8a76]">Owner account support</p>
+                <h3 id="owner-password-title" className="mt-1 text-[17px] font-semibold tracking-[-0.03em] text-[#203328]">Reset owner password</h3>
+              </div>
+              <button type="button" aria-label="Close password reset" onClick={() => setShowOwnerPasswordForm(false)} className="grid size-8 place-items-center rounded-lg text-[#809087] hover:bg-[#f1f5f1]"><X size={16} /></button>
+            </div>
+            <form onSubmit={resetOwnerPassword} className="px-6 py-5">
+              <label className="block text-[10px] font-semibold text-[#465a4c]">
+                Owner mobile number
+                <input
+                  required
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  maxLength={15}
+                  value={ownerMobile}
+                  onChange={(event) => setOwnerMobile(event.target.value.replace(/\D/g, ""))}
+                  placeholder="Country code and mobile number"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[11px] font-normal text-[#33473a] outline-none placeholder:text-[#a8b1aa] focus:border-[#8cbd9b] focus:ring-2 focus:ring-[#176b4b]/10"
+                />
+              </label>
+              <label className="mt-4 block text-[10px] font-semibold text-[#465a4c]">
+                New password
+                <input
+                  required
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={8}
+                  maxLength={128}
+                  value={ownerPassword}
+                  onChange={(event) => setOwnerPassword(event.target.value)}
+                  placeholder="At least 8 characters"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[11px] font-normal text-[#33473a] outline-none placeholder:text-[#a8b1aa] focus:border-[#8cbd9b] focus:ring-2 focus:ring-[#176b4b]/10"
+                />
+              </label>
+              {ownerPasswordError ? <p role="alert" className="mt-4 rounded-lg bg-[#fff4ed] px-3 py-2 text-[11px] text-[#995634]">{ownerPasswordError}</p> : null}
+              {ownerPasswordMessage ? <p role="status" className="mt-4 rounded-lg bg-[#eef7f0] px-3 py-2 text-[11px] text-[#276142]">{ownerPasswordMessage}</p> : null}
+              <div className="mt-6 flex justify-end gap-2 border-t border-[#edf0ed] pt-4">
+                <button type="button" onClick={() => setShowOwnerPasswordForm(false)} className="h-10 rounded-lg border border-[#e3e9e4] px-4 text-[11px] font-semibold text-[#58695e] hover:bg-[#f7f9f7]">Close</button>
+                <button type="submit" disabled={resettingPassword} className="flex h-10 items-center gap-2 rounded-lg bg-[#176b4b] px-4 text-[11px] font-semibold text-white transition hover:bg-[#10583c] disabled:opacity-60">{resettingPassword ? "Resetting..." : "Reset password"} <KeyRound size={13} /></button>
               </div>
             </form>
           </section>

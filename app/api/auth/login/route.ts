@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { createSessionToken, SESSION_COOKIE } from "@/lib/session";
 
@@ -5,11 +6,16 @@ function normalizeMobile(value: string) {
   return value.replace(/\D/g, "");
 }
 
+function normalizeIndianMobile(value: string) {
+  const mobile = normalizeMobile(value);
+  return mobile.length === 12 && mobile.startsWith("91") ? mobile.slice(2) : mobile;
+}
+
 export async function POST(request: Request) {
-  const runtimeEnvironment: string = process.env.NODE_ENV;
-  if (runtimeEnvironment === "production") {
+  const adminPassword = process.env.SUPER_ADMIN_PASSWORD;
+  if (!adminPassword) {
     return NextResponse.json(
-      { error: "Admin sign-in is disabled until production OTP is configured." },
+      { error: "Super-admin sign-in is not configured." },
       { status: 503 },
     );
   }
@@ -35,27 +41,29 @@ export async function POST(request: Request) {
     );
   }
 
-  const mobileNumber = normalizeMobile(body.mobileNumber);
-  const configuredAdminNumber = normalizeMobile(
+  const mobileNumber = normalizeIndianMobile(body.mobileNumber);
+  const configuredAdminNumber = normalizeIndianMobile(
     process.env.SUPER_ADMIN_MOBILE_NUMBER ?? "919567048809",
   );
-  if (!/^\d{7,15}$/.test(mobileNumber) || mobileNumber !== configuredAdminNumber) {
+  if (!/^\d{10}$/.test(mobileNumber) || mobileNumber !== configuredAdminNumber) {
     return NextResponse.json(
       { error: "This mobile number is not authorized for super-admin access." },
       { status: 403 },
     );
   }
 
-  if (body.password !== "1234") {
+  const providedPasswordHash = createHash("sha256").update(body.password).digest();
+  const configuredPasswordHash = createHash("sha256").update(adminPassword).digest();
+  if (!timingSafeEqual(providedPasswordHash, configuredPasswordHash)) {
     return NextResponse.json(
-      { error: "Incorrect test password." },
+      { error: "Incorrect mobile number or password." },
       { status: 401 },
     );
   }
 
   let token: string;
   try {
-    token = createSessionToken(mobileNumber);
+    token = createSessionToken(`91${mobileNumber}`);
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Session setup failed." },

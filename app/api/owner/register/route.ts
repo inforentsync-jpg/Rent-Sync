@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/database";
-import { upsertDevOwner } from "@/lib/dev-store";
+import { createDevOwner } from "@/lib/dev-store";
+import { hashPassword } from "@/lib/password";
 import { createSessionToken, SESSION_COOKIE } from "@/lib/session";
 
 type RegistrationBody = {
   fullName: string;
   mobileNumber: string;
-  otp: string;
+  password: string;
 };
 
 function isRegistrationBody(value: unknown): value is RegistrationBody {
@@ -15,19 +16,11 @@ function isRegistrationBody(value: unknown): value is RegistrationBody {
   return (
     typeof record.fullName === "string" &&
     typeof record.mobileNumber === "string" &&
-    typeof record.otp === "string"
+    typeof record.password === "string"
   );
 }
 
 export async function POST(request: Request) {
-  const runtimeEnvironment: string = process.env.NODE_ENV;
-  if (runtimeEnvironment === "production") {
-    return NextResponse.json(
-      { error: "Owner OTP registration is not enabled in production yet." },
-      { status: 503 },
-    );
-  }
-
   let body: unknown;
   try {
     body = await request.json();
@@ -37,7 +30,7 @@ export async function POST(request: Request) {
 
   if (!isRegistrationBody(body)) {
     return NextResponse.json(
-      { error: "Owner name, mobile number and OTP are required." },
+      { error: "Owner name, mobile number and password are required." },
       { status: 400 },
     );
   }
@@ -56,37 +49,45 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (body.otp !== "1234") {
+  if (body.password.length < 8 || body.password.length > 128) {
     return NextResponse.json(
-      { error: "Incorrect development OTP. Use 1234 for local testing." },
-      { status: 401 },
+      { error: "Password must be between 8 and 128 characters." },
+      { status: 400 },
     );
   }
 
-  if (process.env.NODE_ENV !== "production") {
-    try {
-      await upsertDevOwner(fullName, mobileNumber);
-    } catch (error) {
-      console.error("Unable to register local property owner.", error);
-      return NextResponse.json(
-        { error: "Unable to save your local owner account." },
-        { status: 503 },
-      );
-    }
-  } else {
-    try {
-      await prisma.propertyOwner.upsert({
-        where: { mobileNumber },
-        update: { fullName },
-        create: { fullName, mobileNumber },
+  const passwordHash = await hashPassword(body.password);
+  try {
+    if (process.env.NODE_ENV !== "production") {
+      const owner = await createDevOwner(fullName, mobileNumber, passwordHash);
+      if (!owner) {
+        return NextResponse.json(
+          { error: "An owner account already exists for this mobile number." },
+          { status: 409 },
+        );
+      }
+    } else {
+      await prisma.propertyOwner.create({
+        data: { fullName, mobileNumber, passwordHash },
       });
-    } catch (error) {
-      console.error("Unable to register property owner.", error);
+    }
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "P2002"
+    ) {
       return NextResponse.json(
-        { error: "Unable to save your owner account. Check the database connection and migrations." },
-        { status: 503 },
+        { error: "An owner account already exists for this mobile number." },
+        { status: 409 },
       );
     }
+    console.error("Unable to register property owner.", error);
+    return NextResponse.json(
+      { error: "Unable to save your owner account. Check the database connection and migrations." },
+      { status: 503 },
+    );
   }
 
   let token: string;

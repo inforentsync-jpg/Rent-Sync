@@ -21,16 +21,17 @@ Open [http://localhost:3000](http://localhost:3000).
 
 - `DATABASE_URL`: PostgreSQL connection string.
 - `AUTH_SECRET`: random, private value of at least 32 characters. Keep it identical across app instances.
-- `SUPER_ADMIN_MOBILE_NUMBER`: initial super-admin number, in international format without a plus sign. Defaults to `919567048809`.
+- `SUPER_ADMIN_MOBILE_NUMBER`: super-admin number, in international format without a plus sign. Defaults to `919567048809`.
+- `SUPER_ADMIN_PASSWORD`: super-admin password. Set this as a private environment secret in every deployment; never commit it.
 - `CRON_SECRET`: long random secret used to authorize the scheduled annual-agreement draft job.
-- Local development super-admin testing uses mobile `9567048809` and password `1234`. Owner registration and OTP sign-in use development OTP `1234`; it does not send SMS and is disabled in production. Owners can configure a password from their profile; passwords are stored as scrypt hashes. Use a strong password for production accounts.
+- Super-admin sign-in uses the configured mobile number and `SUPER_ADMIN_PASSWORD` in every environment. Owner registration uses a mobile number and password; passwords are stored as scrypt hashes. Use a strong password for production accounts.
 
 ## Vercel
 
-Connect the GitHub repository to Vercel and add `DATABASE_URL`, a strong `AUTH_SECRET`, and a random `CRON_SECRET` to the Production environment. Use a separate PostgreSQL database for Preview and Production. Each push to the connected deployment branch triggers a Vercel deployment. Before deploying, run `npm run db:migrate:deploy` against each target database. Admin and owner OTP sign-in are disabled in production until a real OTP provider is implemented; owners with configured passwords can sign in using their mobile number and password.
+Connect the GitHub repository to Vercel and add `DATABASE_URL`, a strong `AUTH_SECRET`, `SUPER_ADMIN_MOBILE_NUMBER`, `SUPER_ADMIN_PASSWORD`, and a random `CRON_SECRET` to the Production environment. Use a separate PostgreSQL database for Preview and Production. Each push to the connected deployment branch triggers a Vercel deployment. Before deploying, run `npm run db:migrate:deploy` against each target database. Owner OTP sign-in is disabled in production until a real OTP provider is implemented; owners sign in using their mobile number and password.
 
 Owner registration, owner profiles, and tenant sign-in are available. Tenant agreement creation uses the development test flow and is disabled in production until a complete signing workflow is implemented.
 
-After owner registration, open `/owner/profile` to update the profile name and email, configure or change a password, and view the mobile number and account creation date. `/owner/profle` redirects to the profile page for compatibility. Owner sign-in is available at `/owner/login`; development accounts can use OTP `1234` or a configured password.
+After owner registration, open `/owner/profile` to update the profile name and email, configure or change a password, and view the mobile number and account creation date. `/owner/profle` redirects to the profile page for compatibility. The super administrator can reset an owner's password from the Owners section of `/admin`. Owner sign-in is available at `/owner/login`.
 
 The owner portfolio and a daily 03:00 UTC Vercel cron create missing unsigned drafts for the upcoming calendar year for each assigned tenant and asset. The default term is January 1 through November 30 (11 months); November 31 is not a valid date. Drafts are not signed or activated. Each tenant, asset, and year combination is unique, and duplicate agreements are rejected. Agreement rows include a protected PDF download generated from the supplied rental-agreement template; unavailable personal details are left blank or marked as not provided rather than copied from the template's sample data. The generated PDF uses the Noto Sans Malayalam font under the SIL Open Font License; the license is in `assets/fonts/OFL.txt`.
