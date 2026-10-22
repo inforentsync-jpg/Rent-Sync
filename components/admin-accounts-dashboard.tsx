@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Building2, KeyRound, LoaderCircle, LogOut, Users } from "lucide-react";
+import { Building2, KeyRound, LoaderCircle, LogOut, Users, X } from "lucide-react";
 
 type Account = {
   id: string;
@@ -25,6 +25,7 @@ export default function AdminAccountsDashboard({ mobileNumber }: { mobileNumber:
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
+  const [selectedAccountType, setSelectedAccountType] = useState<AccountType>("OWNER");
   const [newPassword, setNewPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
@@ -73,7 +74,7 @@ export default function AdminAccountsDashboard({ mobileNumber }: { mobileNumber:
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          accountType: activeModule,
+          accountType: selectedAccountType,
           mobileNumber: selectedAccount.mobileNumber,
           password: newPassword,
         }),
@@ -81,7 +82,7 @@ export default function AdminAccountsDashboard({ mobileNumber }: { mobileNumber:
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Unable to reset the password.");
       setNewPassword("");
-      setSuccessMessage(`${activeModule === "OWNER" ? "Owner" : "Tenant"} password reset successfully.`);
+      setSuccessMessage(`${selectedAccountType === "OWNER" ? "Owner" : "Tenant"} password reset successfully.`);
     } catch (cause) {
       setFormError(cause instanceof Error ? cause.message : "Unable to reset the password.");
     } finally {
@@ -128,7 +129,7 @@ export default function AdminAccountsDashboard({ mobileNumber }: { mobileNumber:
         <section className="overflow-hidden rounded-2xl border border-[#e7ece7] bg-white">
           <div className="border-b border-[#edf0ed] px-5 py-5 sm:px-6">
             <h1 className="text-[20px] font-semibold text-[#203328]">{moduleName}</h1>
-            <p className="mt-1 text-[11px] text-[#819087]">Manage {moduleName.toLowerCase()} and reset account passwords.</p>
+            <p className="mt-1 text-[11px] text-[#819087]">Select an account to view its details.</p>
           </div>
           {error ? <p role="alert" className="m-5 rounded-lg bg-[#fff4ed] px-4 py-3 text-[11px] text-[#995634]">{error}</p> : null}
           {loading ? (
@@ -138,24 +139,24 @@ export default function AdminAccountsDashboard({ mobileNumber }: { mobileNumber:
           ) : !error ? (
             <div className="divide-y divide-[#f0f2f0]">
               {visibleAccounts.map((account) => (
-                <article key={account.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-                  <div>
-                    <h2 className="text-[12px] font-semibold text-[#294034]">{account.fullName}</h2>
-                    <p className="mt-1 text-[10px] text-[#79867e]">+{account.mobileNumber}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedAccount(account);
-                      setNewPassword("");
-                      setFormError("");
-                      setSuccessMessage("");
-                    }}
-                    className="flex h-9 items-center justify-center gap-2 rounded-lg border border-[#dce8de] px-3 text-[10px] font-semibold text-[#286244] hover:bg-[#f2f7f3]"
-                  >
-                    <KeyRound size={14} /> Reset password
-                  </button>
-                </article>
+                <button
+                  key={account.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedAccount(account);
+                    setSelectedAccountType(activeModule);
+                    setNewPassword("");
+                    setFormError("");
+                    setSuccessMessage("");
+                  }}
+                  className="flex w-full items-center justify-between px-5 py-4 text-left transition hover:bg-[#f7faf7] focus:bg-[#f7faf7] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#8cbd9b] sm:px-6"
+                >
+                  <span>
+                    <span className="block text-[12px] font-semibold text-[#294034]">{account.fullName}</span>
+                    <span className="mt-1 block text-[10px] text-[#79867e]">+{account.mobileNumber}</span>
+                  </span>
+                  <span className="text-[11px] font-semibold text-[#286244]">View details</span>
+                </button>
               ))}
             </div>
           ) : null}
@@ -164,13 +165,23 @@ export default function AdminAccountsDashboard({ mobileNumber }: { mobileNumber:
 
       {selectedAccount ? (
         <div className="fixed inset-0 z-40 grid place-items-center overflow-y-auto bg-[#10281c]/45 p-4 backdrop-blur-[2px]">
-          <section role="dialog" aria-modal="true" aria-labelledby="reset-password-title" className="my-auto w-full max-w-[420px] rounded-2xl bg-white shadow-2xl">
-            <div className="border-b border-[#edf0ed] px-6 py-5">
-              <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#6b8a76]">{activeModule === "OWNER" ? "Owner" : "Tenant"} account</p>
-              <h2 id="reset-password-title" className="mt-1 text-[17px] font-semibold text-[#203328]">Reset password</h2>
-              <p className="mt-1 text-[11px] text-[#79867e]">{selectedAccount.fullName} · +{selectedAccount.mobileNumber}</p>
+          <section role="dialog" aria-modal="true" aria-labelledby="account-details-title" className="my-auto w-full max-w-[480px] rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-[#edf0ed] px-6 py-5">
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#6b8a76]">{selectedAccountType === "OWNER" ? "Owner" : "Tenant"} account</p>
+                <h2 id="account-details-title" className="mt-1 text-[17px] font-semibold text-[#203328]">{selectedAccount.fullName}</h2>
+                <p className="mt-1 text-[11px] text-[#79867e]">+{selectedAccount.mobileNumber}</p>
+              </div>
+              <button type="button" aria-label="Close account details" onClick={() => setSelectedAccount(null)} className="grid size-8 place-items-center rounded-lg text-[#809087] hover:bg-[#f1f5f1]">
+                <X size={16} />
+              </button>
             </div>
             <form onSubmit={resetPassword} className="px-6 py-5">
+              <div className="mb-5 rounded-xl bg-[#f7faf7] px-4 py-3">
+                <p className="text-[10px] font-semibold text-[#465a4c]">Account created</p>
+                <p className="mt-1 text-[11px] text-[#79867e]">{new Date(selectedAccount.createdAt).toLocaleDateString()}</p>
+              </div>
+              <h3 className="mb-3 text-[13px] font-semibold text-[#203328]">Reset password</h3>
               <label htmlFor="admin-new-password" className="block text-[10px] font-semibold text-[#465a4c]">
                 New password
               </label>

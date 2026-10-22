@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   Building2,
   ChevronDown,
-  CircleHelp,
   Clock3,
   Home,
   KeyRound,
@@ -187,12 +186,6 @@ export default function AdminDashboard({ mobileNumber }: { mobileNumber: string 
                 {title === "Buildings" && buildings.length > 0 ? <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-[9px]">{buildings.length}</span> : null}
               </button>
             ))}
-          </div>
-          <div className="mt-9 rounded-2xl border border-white/10 bg-white/[0.06] p-4">
-            <span className="grid size-8 place-items-center rounded-lg bg-white/10"><CircleHelp size={16} className="text-[#b4d7bf]" /></span>
-            <p className="mt-3 text-[11px] font-semibold">Need a hand?</p>
-            <p className="mt-1 text-[10px] leading-4 text-white/50">Your property workspace is just getting started.</p>
-            <span className="mt-3 inline-block text-[10px] font-semibold text-[#b4d7bf]">Help center soon</span>
           </div>
         </nav>
         <div className="border-t border-white/10 p-4">
