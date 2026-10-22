@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { createDevAgreement, getDevTenantPortal } from "@/lib/dev-store";
+import {
+  createDevAgreement,
+  DevAgreementConflictError,
+  getDevTenantPortal,
+} from "@/lib/dev-store";
 import { prisma } from "@/lib/database";
 import { hasValidElevenMonthTerm } from "@/lib/rental-agreement";
 import { getTenantSession } from "@/lib/session";
@@ -112,6 +116,9 @@ export async function POST(request: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to create agreement.";
     console.error("Unable to create development rental agreement.", error);
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json(
+      { error: message },
+      { status: error instanceof DevAgreementConflictError ? 409 : 400 },
+    );
   }
 }

@@ -26,7 +26,7 @@ export function hasValidElevenMonthTerm(startDate: string, endDate: string) {
   return addElevenMonthTerm(startDate) === endDate;
 }
 
-export type AgreementStatus = "Active" | "Expiring soon" | "Expired";
+export type AgreementStatus = "Active" | "Expiring soon" | "Expired" | "Draft";
 
 export function getAgreementStatus(endDate: string, today = new Date()): AgreementStatus | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(endDate);

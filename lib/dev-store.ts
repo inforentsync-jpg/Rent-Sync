@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { addElevenMonthTerm } from "@/lib/rental-agreement";
+import { getUpcomingAgreementTerm } from "@/lib/agreement-year";
 
 export type DevBuilding = {
   id: string;
@@ -69,7 +71,9 @@ export type DevAgreement = {
   monthlyRent: number;
   securityDeposit: number;
   terms: string;
-  status: "ACTIVE";
+  status: "ACTIVE" | "DRAFT";
+  agreementYear: number;
+  renewalOfId?: string | null;
   createdAt: string;
 };
 
@@ -83,6 +87,8 @@ type DevStore = {
 };
 
 type BuildingInput = Omit<DevBuilding, "id" | "ownerId" | "createdAt" | "updatedAt">;
+
+export class DevAgreementConflictError extends Error {}
 
 const STORE_PATH = path.join(process.cwd(), ".rent-sync-dev-data.json");
 let storeQueue: Promise<void> = Promise.resolve();
@@ -107,9 +113,13 @@ async function readStore(): Promise<DevStore> {
     ) {
       throw new Error("Local Rent-Sync data file has an invalid format.");
     }
-    const existing = store as Partial<DevStore>;
+    const existing = store as Partial<DevStore> & {
+      agreements?: Array<DevAgreement & { renewalOfId?: string | null }>;
+    };
     const owners = existing.owners ?? [];
     const buildings = existing.buildings ?? [];
+    const rawAgreements = existing.agreements ?? [];
+    const agreementsById = new Map(rawAgreements.map((agreement) => [agreement.id, agreement]));
     return {
       owners,
       buildings: buildings.map((building) => ({
@@ -119,7 +129,27 @@ async function readStore(): Promise<DevStore> {
       companies: existing.companies ?? [],
       assets: existing.assets ?? [],
       tenants: existing.tenants ?? [],
-      agreements: existing.agreements ?? [],
+      agreements: rawAgreements.map((agreement) => {
+        const legacySource = agreement.renewalOfId
+          ? agreementsById.get(agreement.renewalOfId)
+          : null;
+        const legacyYear = legacySource
+          ? Number(legacySource.startDate.slice(0, 4)) + 1
+          : Number(agreement.startDate.slice(0, 4));
+        const legacyStart = legacySource ? `${legacyYear}-01-01` : agreement.startDate;
+        const currentAgreement = { ...agreement };
+        delete currentAgreement.renewalOfId;
+        return {
+          ...currentAgreement,
+          startDate: legacyStart,
+          endDate: legacySource
+            ? addElevenMonthTerm(legacyStart) ?? agreement.endDate
+            : agreement.endDate,
+          agreementYear: legacySource
+            ? legacyYear
+            : agreement.agreementYear ?? Number(agreement.startDate.slice(0, 4)),
+        };
+      }),
     };
   } catch (error) {
     if (
@@ -486,7 +516,20 @@ export function createDevAgreement(input: {
         agreementOverlaps(agreement, asset.id, input.startDate, input.endDate),
       )
     ) {
-      throw new Error("This asset already has an agreement for those dates.");
+      throw new DevAgreementConflictError("This asset already has an agreement for those dates.");
+    }
+    const agreementYear = Number(input.startDate.slice(0, 4));
+    if (
+      store.agreements.some(
+        (agreement) =>
+          agreement.assetId === asset.id &&
+          agreement.tenantId === tenant.id &&
+          agreement.agreementYear === agreementYear,
+      )
+    ) {
+      throw new DevAgreementConflictError(
+        "An agreement already exists for this tenant, asset, and year.",
+      );
     }
 
     const now = new Date();
@@ -501,11 +544,96 @@ export function createDevAgreement(input: {
       securityDeposit: asset.securityDeposit,
       terms: input.terms.trim(),
       status: "ACTIVE",
+      agreementYear,
       createdAt: now.toISOString(),
     };
     store.agreements.unshift(agreement);
     await writeStore(store);
     return { ...agreement, tenant, asset };
+  });
+}
+
+export function generateDevAnnualAgreementDrafts(mobileNumber: string, now = new Date()) {
+  return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === mobileNumber);
+    if (!owner) return 0;
+    const term = getUpcomingAgreementTerm(now);
+
+    const ownerCompanies = new Set(
+      store.companies.filter((entry) => entry.ownerId === owner.id).map((entry) => entry.id),
+    );
+    const ownerBuildingIds = new Set(
+      store.buildings
+        .filter(
+          (building) =>
+            building.ownerId === owner.id ||
+            (building.companyId && ownerCompanies.has(building.companyId)),
+        )
+        .map((building) => building.id),
+    );
+    const ownerAssetIds = new Set(
+      store.assets
+        .filter((asset) => ownerBuildingIds.has(asset.buildingId))
+        .map((asset) => asset.id),
+    );
+    const ownerTenants = store.tenants.filter(
+      (tenant) =>
+        tenant.ownerId === owner.id ||
+        tenant.assetIds.some((assetId) => ownerAssetIds.has(assetId)),
+    );
+    let created = 0;
+    for (const assetId of ownerAssetIds) {
+      const asset = store.assets.find((entry) => entry.id === assetId);
+      if (!asset) continue;
+      const tenants = ownerTenants.filter((tenant) => tenant.assetIds.includes(assetId));
+      for (const tenant of tenants) {
+        if (
+          store.agreements.some(
+            (agreement) =>
+              agreement.assetId === assetId &&
+              agreement.tenantId === tenant.id &&
+              agreement.agreementYear === term.year,
+          )
+        ) {
+          continue;
+        }
+        store.agreements.unshift({
+          id: randomUUID(),
+          agreementNumber: `RS-${term.year}-${randomUUID().slice(0, 8).toUpperCase()}`,
+          assetId,
+          tenantId: tenant.id,
+          startDate: term.startDate,
+          endDate: term.endDate,
+          monthlyRent: asset.monthlyRent,
+          securityDeposit: asset.securityDeposit,
+          terms: "",
+          status: "DRAFT",
+          agreementYear: term.year,
+          createdAt: now.toISOString(),
+        });
+        created += 1;
+      }
+    }
+    if (created) await writeStore(store);
+    return created;
+  });
+}
+
+export function getDevOwnerAgreement(mobileNumber: string, agreementId: string) {
+  return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === mobileNumber);
+    if (!owner) return null;
+    const agreement = store.agreements.find((entry) => entry.id === agreementId);
+    if (!agreement) return null;
+    const asset = store.assets.find((entry) => entry.id === agreement.assetId);
+    const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
+    const company = store.companies.find((entry) => entry.id === building?.companyId);
+    const isOwned =
+      building?.ownerId === owner.id ||
+      (company?.ownerId === owner.id && building?.companyId === company.id);
+    const tenant = store.tenants.find((entry) => entry.id === agreement.tenantId);
+    if (!isOwned || !asset || !building || !tenant) return null;
+    return { owner, tenant, asset, building, agreement };
   });
 }
 

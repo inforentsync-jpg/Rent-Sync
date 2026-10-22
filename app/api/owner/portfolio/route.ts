@@ -7,11 +7,14 @@ import {
   createDevCompany,
   createDevOwnerBuilding,
   createDevTenant,
+  DevAgreementConflictError,
+  generateDevAnnualAgreementDrafts,
   getDevOwnerPortfolio,
   updateDevAsset,
 } from "@/lib/dev-store";
 import { getOwnerSession } from "@/lib/session";
 import { hasValidElevenMonthTerm } from "@/lib/rental-agreement";
+import { generateAnnualAgreementDrafts } from "@/lib/annual-agreement-drafts";
 
 type PortfolioInput = Record<string, unknown>;
 
@@ -41,6 +44,7 @@ export async function GET() {
 
   if (process.env.NODE_ENV !== "production") {
     try {
+      await generateDevAnnualAgreementDrafts(session.mobileNumber);
       const portfolio = await getDevOwnerPortfolio(session.mobileNumber);
       if (!portfolio) {
         return NextResponse.json({ error: "Owner account was not found." }, { status: 404 });
@@ -53,6 +57,7 @@ export async function GET() {
   }
 
   try {
+    await generateAnnualAgreementDrafts();
     const owner = await prisma.propertyOwner.findUnique({
       where: { mobileNumber: session.mobileNumber },
       include: {
@@ -218,7 +223,10 @@ export async function POST(request: Request) {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unable to create agreement.";
         console.error("Unable to create local owner rental agreement.", error);
-        return NextResponse.json({ error: message }, { status: 400 });
+        return NextResponse.json(
+          { error: message },
+          { status: error instanceof DevAgreementConflictError ? 409 : 400 },
+        );
       }
     }
 
@@ -245,6 +253,17 @@ export async function POST(request: Request) {
 
       const startsAt = new Date(`${startDate}T00:00:00.000Z`);
       const endsAt = new Date(`${endDate}T00:00:00.000Z`);
+      const agreementYear = Number(startDate.slice(0, 4));
+      const agreementForYear = await prisma.rentalAgreement.findFirst({
+        where: { assetId, tenantId, agreementYear },
+        select: { id: true },
+      });
+      if (agreementForYear) {
+        return NextResponse.json(
+          { error: "An agreement already exists for this tenant, asset, and year." },
+          { status: 409 },
+        );
+      }
       const overlappingAgreement = await prisma.rentalAgreement.findFirst({
         where: {
           assetId,
@@ -266,6 +285,7 @@ export async function POST(request: Request) {
           agreementNumber: `RS-${new Date().getFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`,
           assetId,
           tenantId,
+          agreementYear,
           startDate: startsAt,
           endDate: endsAt,
           monthlyRent: asset.monthlyRent,
@@ -275,6 +295,17 @@ export async function POST(request: Request) {
       });
       return NextResponse.json({ agreement }, { status: 201 });
     } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "P2002"
+      ) {
+        return NextResponse.json(
+          { error: "An agreement already exists for this tenant, asset, and year." },
+          { status: 409 },
+        );
+      }
       console.error("Unable to create database owner rental agreement.", error);
       return NextResponse.json(
         { error: "Unable to create agreement. Check the database connection and migrations." },

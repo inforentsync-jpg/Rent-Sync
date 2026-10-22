@@ -108,9 +108,10 @@ export default function TenantDashboard({ mobileNumber }: { mobileNumber: string
     return agreements.some(
       (agreement) =>
         agreement.assetId === asset.id &&
-        agreement.status === "ACTIVE" &&
-        agreement.startDate.slice(0, 10) <= end &&
-        agreement.endDate.slice(0, 10) >= start,
+        (agreement.startDate.slice(0, 4) === start.slice(0, 4) ||
+          (agreement.status === "ACTIVE" &&
+            agreement.startDate.slice(0, 10) <= end &&
+            agreement.endDate.slice(0, 10) >= start)),
     );
   }
 
@@ -219,7 +220,7 @@ export default function TenantDashboard({ mobileNumber }: { mobileNumber: string
               <label className="block text-[10px] font-semibold text-[#465a4c]">Available assigned asset<select required value={assetId} onChange={(event) => setAssetId(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[11px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]"><option value="">Select asset</option>{availableAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name} · {asset.unitNumber} · ₹{asset.monthlyRent.toLocaleString("en-IN")}/month</option>)}</select></label>
               {selectedAsset && <div className="mt-3 rounded-lg bg-[#f5f8f5] px-3 py-2.5 text-[10px] leading-5 text-[#617368]"><p>Monthly rent: ₹{selectedAsset.monthlyRent.toLocaleString("en-IN")}</p><p>Security deposit: ₹{selectedAsset.securityDeposit.toLocaleString("en-IN")}</p><p>Property: {selectedAsset.buildingName ?? selectedAsset.name}{selectedAsset.city ? `, ${selectedAsset.city}` : ""}</p></div>}
               <label className="mt-4 block text-[10px] font-semibold text-[#465a4c]">Agreement start date<input required type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[11px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]" /></label>
-              <div className="mt-3 rounded-lg border border-[#e6eee7] bg-[#f7faf7] px-3 py-2.5 text-[10px] text-[#55705f]">Agreement end date: <strong>{endDate ? formatDate(endDate) : "Select a valid start date"}</strong> · 11 months</div>
+              <div className="mt-3 rounded-lg border border-[#e6eee7] bg-[#f7faf7] px-3 py-2.5 text-[10px] text-[#55705f]">Agreement end date: <strong>{endDate ? formatDate(endDate) : "Select a valid start date"}</strong> · 11 months. The default upcoming-year term is January 1 through November 30; November 31 is not a valid date. One agreement is allowed for each tenant, asset, and year.</div>
               <label className="mt-4 block text-[10px] font-semibold text-[#465a4c]">Additional terms or notes (optional)<textarea rows={4} maxLength={2000} value={terms} onChange={(event) => setTerms(event.target.value)} placeholder="Any agreed conditions, maintenance notes, or additional terms..." className="mt-1.5 w-full resize-y rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 py-2.5 text-[11px] font-normal text-[#33473a] outline-none placeholder:text-[#a8b1aa] focus:border-[#8cbd9b]" /></label>
               <p className="mt-3 text-[9px] leading-4 text-[#849188]">Review and print the generated agreement before signing. Follow local registration and stamp-duty requirements.</p>
               {formError && <p role="alert" className="mt-3 rounded-lg bg-[#fff4ed] px-3 py-2 text-[11px] text-[#995634]">{formError}</p>}

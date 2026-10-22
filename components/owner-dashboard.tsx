@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import {
   Building2,
+  FileDown,
   FileText,
   Home,
   LogOut,
@@ -54,6 +56,7 @@ type Agreement = {
   securityDeposit?: number;
   terms?: string;
   status?: string;
+  agreementYear?: number;
   createdAt: string;
 };
 type Portfolio = {
@@ -96,8 +99,8 @@ function subscribeToDashboardRoute(callback: () => void) {
   };
 }
 
-function getDashboardRouteSearch() {
-  return window.location.search;
+function getDashboardRouteState() {
+  return `${window.location.pathname}${window.location.search}`;
 }
 
 const emptyPortfolio: Portfolio = {
@@ -118,15 +121,20 @@ const formLabels: Record<FormKind, string> = {
 
 export default function OwnerDashboard() {
   const router = useRouter();
-  const routeSearch = useSyncExternalStore(
+  const routeState = useSyncExternalStore(
     subscribeToDashboardRoute,
-    getDashboardRouteSearch,
+    getDashboardRouteState,
     () => "",
   );
-  const routeParams = new URLSearchParams(routeSearch);
-  const routeModule = routeParams.get("module");
+  const routeUrl = new URL(routeState || "/owner/dashboard", "http://localhost");
+  const routeParams = routeUrl.searchParams;
+  const agreementYearMatch = routeUrl.pathname.match(
+    /^\/owner\/dashboard\/agreements\/(\d{4})\/?$/,
+  );
+  const routeModule = agreementYearMatch ? "agreements" : routeParams.get("module");
   const selectedModule: ModuleKey = isModuleKey(routeModule) ? routeModule : "companies";
   const selectedRecordId = routeParams.get("id");
+  const selectedAgreementYear = agreementYearMatch?.[1] ?? null;
   const [portfolio, setPortfolio] = useState(emptyPortfolio);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -262,7 +270,7 @@ export default function OwnerDashboard() {
       actionLabel: "Add building",
       formKind: "building" as const,
       empty: "No buildings yet.",
-      columns: ["Building", "Company", "Location", "Assets", "Tenants"],
+      columns: ["Building", "Company", "Location", "Assets", "Tenants", "Total rent / month", "Total advance"],
       rows: portfolio.buildings.map((building) => {
         const buildingAssets = portfolio.assets.filter((asset) => asset.buildingId === building.id);
         const assignedTenantIds = new Set(
@@ -271,6 +279,13 @@ export default function OwnerDashboard() {
             .map((tenant) => tenant.id),
         );
         const company = portfolio.companies.find((entry) => entry.id === building.companyId);
+        const buildingTotals = buildingAssets.reduce(
+          (totals, asset) => ({
+            monthlyRent: totals.monthlyRent + asset.monthlyRent,
+            advance: totals.advance + asset.securityDeposit,
+          }),
+          { monthlyRent: 0, advance: 0 },
+        );
         return {
           key: building.id,
           cells: [
@@ -279,6 +294,8 @@ export default function OwnerDashboard() {
             { value: [building.address, building.city, building.state, building.postalCode].filter(Boolean).join(", ") || "—" },
             { value: String(buildingAssets.length) },
             { value: String(assignedTenantIds.size) },
+            { value: `₹${buildingTotals.monthlyRent.toLocaleString("en-IN")}`, className: "font-semibold text-[#234b34]" },
+            { value: `₹${buildingTotals.advance.toLocaleString("en-IN")}`, className: "font-semibold text-[#234b34]" },
           ],
         };
       }),
@@ -328,29 +345,46 @@ export default function OwnerDashboard() {
       actionLabel: "Add agreement",
       formKind: "agreement" as const,
       empty: "No agreements yet.",
-      columns: ["Tenant", "Agreement ID", "Status", "Asset", "Rent / month", "Advance", "Start date", "End date"],
+      columns: ["Year", "Tenant", "Status", "Asset", "Rent / month", "Advance", "PDF"],
       rows: portfolio.agreements.map((agreement) => {
         const tenant = portfolio.tenants.find((entry) => entry.id === agreement.tenantId);
         const asset = portfolio.assets.find((entry) => entry.id === agreement.assetId);
-        const status = getAgreementStatus(agreement.endDate);
+        const status = agreement.status === "DRAFT" ? "Draft" : getAgreementStatus(agreement.endDate);
         return {
           key: agreement.id,
           cells: [
+            { value: getAgreementYear(agreement.startDate), className: "font-semibold text-[#176b4b]" },
             { value: tenant?.fullName ?? "Tenant", className: "font-semibold text-[#203328]" },
-            { value: agreement.agreementNumber },
             { value: status ?? "—", badge: true, status },
             { value: asset ? `${asset.name} · ${asset.unitNumber}` : "—" },
             { value: `₹${agreement.monthlyRent.toLocaleString("en-IN")}` },
             { value: `₹${(agreement.securityDeposit ?? 0).toLocaleString("en-IN")}` },
-            { value: agreement.startDate.slice(0, 10) },
-            { value: agreement.endDate.slice(0, 10), className: "font-semibold text-[#b5473c]" },
+            { value: "" },
           ],
         };
       }),
     },
   }[selectedModule];
+  const agreementYears = [...new Set(
+    portfolio.agreements.map((agreement) => getAgreementYear(agreement.startDate)),
+  )].sort((left, right) => Number(right) - Number(left));
+  const displayRows =
+    selectedModule === "agreements" && selectedAgreementYear !== null
+      ? selectedDetail.rows.filter((row) => row.cells[0]?.value === selectedAgreementYear)
+      : selectedDetail.rows;
+  const buildingAssetTotals = portfolio.assets.reduce(
+    (totals, asset) => ({
+      monthlyRent: totals.monthlyRent + asset.monthlyRent,
+      advance: totals.advance + asset.securityDeposit,
+    }),
+    { monthlyRent: 0, advance: 0 },
+  );
 
-  function syncModuleUrl(module: ModuleKey, recordId: string | null = null) {
+  function syncModuleUrl(
+    module: ModuleKey,
+    recordId: string | null = null,
+    year?: string | null,
+  ) {
     const params = new URLSearchParams(window.location.search);
     params.set("module", module);
     if (recordId) {
@@ -358,7 +392,14 @@ export default function OwnerDashboard() {
     } else {
       params.delete("id");
     }
-    const nextUrl = `${window.location.pathname}?${params.toString()}`;
+    params.delete("year");
+    let pathname = window.location.pathname;
+    if (module !== "agreements" || year === null || (recordId === null && year === undefined)) {
+      pathname = "/owner/dashboard";
+    } else if (year) {
+      pathname = `/owner/dashboard/agreements/${year}`;
+    }
+    const nextUrl = `${pathname}?${params.toString()}`;
     window.history.pushState({}, "", nextUrl);
     window.dispatchEvent(new Event("rent-sync-route-change"));
   }
@@ -561,23 +602,25 @@ export default function OwnerDashboard() {
                   <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#6b8a76]">Rental agreement</p>
                   <h2 className="mt-1 text-[20px] font-semibold tracking-[-0.04em] text-[#17271e]">{selectedAgreementTenant?.fullName ?? "Tenant not found"}</h2>
                   <p className="mt-1 text-[10px] font-semibold text-[#718078]">{selectedAgreement.agreementNumber}</p>
-                  <div className="mt-2"><AgreementStatusBadge status={getAgreementStatus(selectedAgreement.endDate)} /></div>
+                  <div className="mt-2">
+                    <AgreementStatusBadge
+                      status={selectedAgreement.status === "DRAFT" ? "Draft" : getAgreementStatus(selectedAgreement.endDate)}
+                    />
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <button type="button" onClick={startRecordEdit} className="rounded-lg border border-[#dfe8e1] bg-[#f7faf7] px-3 py-2 text-[10px] font-semibold text-[#355942]">Edit</button>
                   <button type="button" onClick={() => handleDeleteRecord(selectedAgreement.id)} className="rounded-lg border border-[#f0d9d2] bg-[#fff8f7] px-3 py-2 text-[10px] font-semibold text-[#9a4a3d]">Delete</button>
-                  <button type="button" onClick={() => syncModuleUrl("agreements")} className="rounded-lg border border-[#dfe8e1] bg-[#f5f8f5] px-3 py-2 text-[10px] font-semibold text-[#355942]">Back to agreements</button>
+                  <button
+                    type="button"
+                    onClick={() => syncModuleUrl("agreements", null, selectedAgreementYear)}
+                    className="rounded-lg border border-[#dfe8e1] bg-[#f5f8f5] px-3 py-2 text-[10px] font-semibold text-[#355942]"
+                  >
+                    Back to agreements
+                  </button>
                 </div>
               </div>
-              <div className="border-b border-[#edf0ed] p-4 sm:p-6">
-                <AgreementFacts
-                  startDate={selectedAgreement.startDate}
-                  endDate={selectedAgreement.endDate}
-                  monthlyRent={selectedAgreement.monthlyRent}
-                  advanceAmount={selectedAgreement.securityDeposit}
-                />
-              </div>
-              <div role="tablist" aria-label="Agreement sections" className="flex gap-1 overflow-x-auto border-b border-[#edf0ed] px-4 sm:px-6">
+              <div role="tablist" aria-label="Agreement sections" className="flex gap-2 overflow-x-auto border-b border-[#edf0ed] px-4 sm:gap-4 sm:px-6">
                 {agreementTabs.map((tab) => (
                   <button
                     key={tab.id}
@@ -587,42 +630,64 @@ export default function OwnerDashboard() {
                     aria-selected={agreementTab === tab.id}
                     aria-controls="agreement-tab-panel"
                     onClick={() => setAgreementTab(tab.id)}
-                    className={`shrink-0 border-b-2 px-3 py-3 text-[10px] font-semibold transition ${agreementTab === tab.id ? "border-[#176b4b] text-[#176b4b]" : "border-transparent text-[#849188] hover:text-[#355942]"}`}
+                    className={`shrink-0 border-b-2 px-3 py-4 text-[12px] font-semibold transition sm:px-4 ${agreementTab === tab.id ? "border-[#176b4b] text-[#176b4b]" : "border-transparent text-[#849188] hover:text-[#355942]"}`}
                   >
                     {tab.label}
                   </button>
                 ))}
               </div>
-              <div id="agreement-tab-panel" role="tabpanel" aria-labelledby={`agreement-tab-${agreementTab}`} className="grid gap-4 p-5 sm:grid-cols-2 sm:p-6">
+              <div id="agreement-tab-panel" role="tabpanel" aria-labelledby={`agreement-tab-${agreementTab}`} className="grid gap-5 p-6 sm:grid-cols-2 sm:gap-6 sm:p-8 lg:p-10">
                 {agreementTab === "kyc" ? <>
-                  <h3 className="sm:col-span-2 text-[12px] font-semibold text-[#203328]">KYC</h3>
+                  <div className="sm:col-span-2">
+                    <TabPanelHeading title="Tenant and property details" description="The people and property covered by this agreement." />
+                  </div>
                   <DetailField label="Tenant" value={selectedAgreementTenant?.fullName ?? "Tenant not found"} />
                   <DetailField label="Tenant mobile" value={selectedAgreementTenant?.mobileNumber ? `+${selectedAgreementTenant.mobileNumber}` : "Phone not provided"} />
                   <DetailField label="Asset" value={selectedAgreementAsset ? `${selectedAgreementAsset.name} · Unit ${selectedAgreementAsset.unitNumber}` : "Asset not found"} />
                   <DetailField label="Building" value={selectedAgreementBuilding?.name ?? "—"} />
                   <DetailField label="Property address" value={selectedAgreementBuilding ? `${selectedAgreementBuilding.address}, ${selectedAgreementBuilding.city}, ${selectedAgreementBuilding.state} ${selectedAgreementBuilding.postalCode}` : "—"} />
-                  <DetailField label="Status" value={getAgreementStatus(selectedAgreement.endDate) ?? "—"} />
                   <div className="sm:col-span-2"><PanelMessage>KYC documents are not available for this tenant yet.</PanelMessage></div>
                 </> : null}
-                {agreementTab === "rent" ? <>
-                  <DetailField label="Rent amount" value={`₹${selectedAgreement.monthlyRent.toLocaleString("en-IN")}`} />
-                  <DetailField label="Rent frequency" value="Monthly" />
-                </> : null}
+                {agreementTab === "rent" ? (
+                  <>
+                    <div className="sm:col-span-2">
+                      <TabPanelHeading title="Rent and agreement period" description="A clear view of the rental amount and the dates covered." />
+                    </div>
+                    <AgreementMetric label="Agreement year" value={getAgreementYear(selectedAgreement.startDate)} />
+                    <AgreementMetric label="Monthly rent" value={`₹${selectedAgreement.monthlyRent.toLocaleString("en-IN")}`} />
+                    <AgreementMetric label="Agreement start date" value={formatAgreementDate(selectedAgreement.startDate)} />
+                    <AgreementMetric label="Agreement end date" value={formatAgreementDate(selectedAgreement.endDate)} />
+                  </>
+                ) : null}
                 {agreementTab === "terms" ? (
-                  <div className="sm:col-span-2">
-                    {selectedAgreement.terms
-                      ? <DetailField label="Agreement terms" value={selectedAgreement.terms} />
-                      : <PanelMessage>No terms have been recorded for this agreement.</PanelMessage>}
+                  <div className="sm:col-span-2 space-y-5">
+                    <TabPanelHeading title="Agreement terms" description="The additional conditions recorded for this rental." />
+                    {selectedAgreement.terms ? (
+                      <DetailField label="Terms and notes" value={selectedAgreement.terms} />
+                    ) : (
+                      <PanelMessage>No terms have been recorded for this agreement.</PanelMessage>
+                    )}
                   </div>
                 ) : null}
                 {agreementTab === "advance" ? (
-                  <div className="sm:col-span-2">
-                    <DetailField label="Security deposit" value={selectedAgreement.securityDeposit === undefined ? "—" : `₹${selectedAgreement.securityDeposit.toLocaleString("en-IN")}`} />
-                    <p className="mt-3 text-[10px] text-[#849188]">A separate advance amount is not stored for this agreement.</p>
-                  </div>
+                  <>
+                    <div className="sm:col-span-2">
+                      <TabPanelHeading title="Advance and security deposit" description="The upfront deposit recorded for this agreement." />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <AgreementMetric
+                        label="Security deposit"
+                        value={selectedAgreement.securityDeposit === undefined ? "Not recorded" : `₹${selectedAgreement.securityDeposit.toLocaleString("en-IN")}`}
+                      />
+                      <p className="mt-4 text-[12px] text-[#849188]">A separate advance amount is not stored for this agreement.</p>
+                    </div>
+                  </>
                 ) : null}
                 {agreementTab === "important-terms" ? (
-                  <div className="sm:col-span-2"><PanelMessage>Important terms are not recorded separately for this agreement.</PanelMessage></div>
+                  <div className="sm:col-span-2 space-y-5">
+                    <TabPanelHeading title="Important terms" description="Key conditions and notes for this rental agreement." />
+                    <PanelMessage>Important terms are not recorded separately for this agreement.</PanelMessage>
+                  </div>
                 ) : null}
               </div>
             </article>
@@ -885,54 +950,128 @@ export default function OwnerDashboard() {
             <div className="rounded-2xl border border-[#e7ece7] bg-white shadow-[0_4px_20px_-12px_rgba(28,53,37,0.12)]">
               <div className="flex flex-col justify-between gap-3 border-b border-[#edf0ed] px-5 py-4 sm:flex-row sm:items-center sm:px-6">
                 <h2 className="text-[20px] font-semibold tracking-[-0.04em] text-[#17271e]">{selectedDetail.title}</h2>
-                {selectedDetail.actionLabel && selectedDetail.formKind ? (
-                  <ActionButton onClick={() => openForm(selectedDetail.formKind!)} label={selectedDetail.actionLabel} />
-                ) : null}
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  {selectedModule === "agreements" && selectedAgreementYear !== null && (
+                    <Link
+                      href="/owner/dashboard?module=agreements"
+                      className="h-9 rounded-lg border border-[#e3eae4] bg-white px-3 text-[11px] font-semibold text-[#315b41] transition hover:bg-[#f1f6f2]"
+                    >
+                      All years
+                    </Link>
+                  )}
+                  {selectedDetail.actionLabel && selectedDetail.formKind ? (
+                    <ActionButton onClick={() => openForm(selectedDetail.formKind!)} label={selectedDetail.actionLabel} />
+                  ) : null}
+                </div>
               </div>
+
+              {selectedModule === "buildings" && !loading && !error && (
+                <div className="grid gap-4 border-b border-[#edf0ed] bg-[#fbfcfb] p-5 sm:grid-cols-2 sm:p-6">
+                  <AgreementMetric
+                    label="Total monthly rent"
+                    value={`₹${buildingAssetTotals.monthlyRent.toLocaleString("en-IN")}`}
+                  />
+                  <AgreementMetric
+                    label="Total advance / security deposit"
+                    value={`₹${buildingAssetTotals.advance.toLocaleString("en-IN")}`}
+                  />
+                </div>
+              )}
 
               {loading ? (
                 <div className="px-5 py-7"><PanelMessage>Loading your portfolio...</PanelMessage></div>
               ) : error ? (
                 <div className="px-5 py-7"><PanelMessage error>{error}</PanelMessage></div>
-              ) : selectedDetail.rows.length ? (
-                <div className="overflow-x-auto">
-                  <table aria-label={`${selectedDetail.title} report`} className="w-full min-w-[760px] border-collapse text-left">
-                    <thead className="bg-[#f7faf7] text-[9px] font-semibold uppercase tracking-[0.1em] text-[#718078]">
-                      <tr>
-                        {selectedDetail.columns.map((column) => (
-                          <th key={column} scope="col" className="px-5 py-3">{column}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#edf0ed]">
-                      {selectedDetail.rows.map((row) => (
-                        <tr
-                          key={row.key}
-                          role="link"
-                          tabIndex={0}
-                          onClick={() => handleEditRecord(row.key)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              handleEditRecord(row.key);
-                            }
-                          }}
-                          className="cursor-pointer text-[11px] text-[#33473a] transition hover:bg-[#f7faf7] focus:bg-[#f7faf7] focus:outline-none"
+              ) : selectedModule === "agreements" && selectedAgreementYear === null ? (
+                agreementYears.length ? (
+                  <div aria-label="Agreement years" className="grid gap-3 p-5 sm:grid-cols-2 sm:p-6 lg:grid-cols-3">
+                    {agreementYears.map((year) => {
+                      const count = portfolio.agreements.filter(
+                        (agreement) => getAgreementYear(agreement.startDate) === year,
+                      ).length;
+                      return (
+                        <Link
+                          key={year}
+                          href={`/owner/dashboard/agreements/${year}`}
+                          className="group flex min-h-28 items-center justify-between rounded-2xl border border-[#e3eae4] bg-gradient-to-br from-white to-[#f7faf7] p-5 text-left shadow-[0_4px_20px_-16px_rgba(28,53,37,0.2)] transition hover:-translate-y-0.5 hover:border-[#b9d6c3] hover:shadow-md sm:p-6"
                         >
-                          {row.cells.map((cell, index) => (
-                            <td key={`${row.key}-${selectedDetail.columns[index]}`} className={`px-5 py-4 ${cell.className ?? ""}`}>
-                              {cell.badge
-                                ? <AgreementStatusBadge status={cell.status ?? null} />
-                                : cell.value}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                          <span>
+                            <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-[#849188]">Agreement year</span>
+                            <span className="mt-2 block text-[26px] font-semibold tracking-[-0.04em] text-[#176b4b]">{year}</span>
+                          </span>
+                          <span className="rounded-full bg-[#eaf3ec] px-3 py-1.5 text-[11px] font-semibold text-[#315b41] group-hover:bg-[#dcebe0]">
+                            {count} {count === 1 ? "agreement" : "agreements"}
+                          </span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="px-5 py-7 text-[13px] text-[#849188]">{selectedDetail.empty}</p>
+                )
               ) : (
-                <p className="px-5 py-7 text-[11px] text-[#849188]">{selectedDetail.empty}</p>
+                <>
+                  {selectedModule === "agreements" && selectedAgreementYear !== null && (
+                    <div className="border-b border-[#edf0ed] bg-[#fbfcfb] px-5 py-3 sm:px-6">
+                      <p className="text-[12px] font-semibold text-[#315b41]">{selectedAgreementYear} agreements</p>
+                    </div>
+                  )}
+                  {displayRows.length ? (
+                    <div className="overflow-x-auto">
+                      <table aria-label={`${selectedDetail.title} report`} className="w-full min-w-[760px] border-collapse text-left">
+                        <thead className="bg-[#f7faf7] text-[9px] font-semibold uppercase tracking-[0.1em] text-[#718078]">
+                          <tr>
+                            {selectedDetail.columns.map((column) => (
+                              <th key={column} scope="col" className="px-5 py-3">{column}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#edf0ed]">
+                          {displayRows.map((row) => (
+                            <tr
+                              key={row.key}
+                              role="link"
+                              tabIndex={0}
+                              onClick={() => handleEditRecord(row.key)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  handleEditRecord(row.key);
+                                }
+                              }}
+                              className="cursor-pointer text-[11px] text-[#33473a] transition hover:bg-[#f7faf7] focus:bg-[#f7faf7] focus:outline-none"
+                            >
+                              {row.cells.map((cell, index) => (
+                                <td key={`${row.key}-${selectedDetail.columns[index]}`} className={`px-5 py-4 ${cell.className ?? ""}`}>
+                                  {selectedModule === "agreements" && index === row.cells.length - 1 ? (
+                                    <a
+                                      href={`/api/owner/agreements/${encodeURIComponent(row.key)}/pdf`}
+                                      download
+                                      aria-label={`Download PDF for ${portfolio.agreements.find((agreement) => agreement.id === row.key)?.agreementNumber ?? "agreement"}`}
+                                      title="Download agreement PDF"
+                                      onClick={(event) => event.stopPropagation()}
+                                      className="inline-flex size-8 items-center justify-center rounded-lg border border-[#dfe9e1] bg-white text-[#286244] transition hover:bg-[#eff6f0] focus:outline-none focus:ring-2 focus:ring-[#8cbd9b]"
+                                    >
+                                      <FileDown size={15} />
+                                    </a>
+                                  ) : cell.badge
+                                    ? <AgreementStatusBadge status={cell.status ?? null} />
+                                    : cell.value}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="px-5 py-7 text-[13px] text-[#849188]">
+                      {selectedModule === "agreements" && selectedAgreementYear !== null
+                        ? `No agreements for ${selectedAgreementYear}.`
+                        : selectedDetail.empty}
+                    </p>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -968,7 +1107,7 @@ export default function OwnerDashboard() {
                 <label className="block text-[10px] font-semibold text-[#465a4c]">Asset<select required value={form.assetId ?? ""} onChange={(event) => setForm((current) => ({ ...current, assetId: event.target.value, tenantId: "" }))} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[11px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]"><option value="">Select asset</option>{portfolio.assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name} · {asset.unitNumber}</option>)}</select></label>
                 <label className="mt-3 block text-[10px] font-semibold text-[#465a4c]">Tenant<select required value={form.tenantId ?? ""} onChange={(event) => setForm((current) => ({ ...current, tenantId: event.target.value }))} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[11px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]"><option value="">Select tenant</option>{portfolio.tenants.filter((tenant) => tenant.assetIds.includes(form.assetId ?? "")).map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.fullName}{tenant.mobileNumber ? ` · +${tenant.mobileNumber}` : ""}</option>)}</select></label>
                 <label className="mt-3 block text-[10px] font-semibold text-[#465a4c]">Agreement start date<input required type="date" value={form.startDate ?? ""} onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[11px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]" /></label>
-                <p className="mt-2 rounded-lg bg-[#f7faf7] px-3 py-2.5 text-[10px] text-[#55705f]">Agreement end date: <strong>{form.startDate ? addElevenMonthTerm(form.startDate) ?? "Choose a valid start date" : "Choose a start date"}</strong> · 11 months</p>
+                <p className="mt-2 rounded-lg bg-[#f7faf7] px-3 py-2.5 text-[10px] text-[#55705f]">Agreement end date: <strong>{form.startDate ? addElevenMonthTerm(form.startDate) ?? "Choose a valid start date" : "Choose a start date"}</strong> · 11 months. Upcoming-year defaults run January 1 through November 30; November 31 is not a valid date. Only one agreement is allowed for the same tenant, asset, and year.</p>
                 <label className="mt-3 block text-[10px] font-semibold text-[#465a4c]">Additional terms or notes (optional)<textarea rows={3} maxLength={2000} value={form.terms ?? ""} onChange={(event) => setForm((current) => ({ ...current, terms: event.target.value }))} placeholder="Additional agreed terms..." className="mt-1.5 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 py-2 text-[11px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]" /></label>
               </>}
               {formError && <p role="alert" className="mt-4 rounded-lg bg-[#fff4ed] px-3 py-2 text-[11px] text-[#995634]">{formError}</p>}
@@ -986,14 +1125,46 @@ function ActionButton({ onClick, label, disabled = false }: { onClick: () => voi
 }
 
 function PanelMessage({ children, error = false }: { children: React.ReactNode; error?: boolean }) {
-  return <div role={error ? "alert" : undefined} className={`rounded-xl border p-4 text-[11px] ${error ? "border-[#f1d9ce] bg-[#fff8f4] text-[#995634]" : "border-[#e7ece7] bg-white text-[#849188]"}`}>{children}</div>;
+  return <div role={error ? "alert" : undefined} className={`rounded-xl border p-5 text-[13px] leading-6 ${error ? "border-[#f1d9ce] bg-[#fff8f4] text-[#995634]" : "border-[#e7ece7] bg-[#f9fbf9] text-[#718078]"}`}>{children}</div>;
 }
 
 function DetailField({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-[#edf0ed] bg-[#fcfdfc] p-4">
-      <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-[#849188]">{label}</p>
-      <p className="mt-2 whitespace-pre-wrap text-[12px] font-medium text-[#33473a]">{value}</p>
+    <div className="rounded-2xl border border-[#e7ece7] bg-[#fbfcfb] p-5 sm:p-6">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#849188]">{label}</p>
+      <p className="mt-2 whitespace-pre-wrap text-[15px] font-medium leading-6 text-[#263c2e]">{value}</p>
+    </div>
+  );
+}
+
+function formatAgreementDate(value: string) {
+  const date = new Date(`${value.slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
+function getAgreementYear(value: string) {
+  return value.slice(0, 4);
+}
+
+function TabPanelHeading({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="border-b border-[#edf0ed] pb-4">
+      <h3 className="text-[17px] font-semibold tracking-[-0.03em] text-[#203328] sm:text-[19px]">{title}</h3>
+      <p className="mt-1.5 text-[12px] leading-5 text-[#849188] sm:text-[13px]">{description}</p>
+    </div>
+  );
+}
+
+function AgreementMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-2xl border border-[#e1ebe3] bg-gradient-to-br from-[#f6faf6] to-white p-5 sm:p-6">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#6b8a76]">{label}</p>
+      <p className="mt-3 break-words text-[19px] font-semibold tracking-[-0.03em] text-[#234b34] sm:text-[22px]">{value}</p>
     </div>
   );
 }

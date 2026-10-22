@@ -24,6 +24,7 @@ export default function AgreementFacts({
   compact = false,
 }: AgreementFactsProps) {
   const facts = [
+    { label: "Agreement year", value: startDate.slice(0, 4), endDate: false },
     { label: "Agreement start date", value: formatDate(startDate), endDate: false },
     { label: "Agreement end date", value: formatDate(endDate), endDate: true },
     { label: "Monthly rent", value: `₹${monthlyRent.toLocaleString("en-IN")}`, endDate: false },
@@ -35,7 +36,7 @@ export default function AgreementFacts({
   ];
 
   return (
-    <div className={`grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4 ${compact ? "w-full" : ""}`}>
+    <div className={`grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-5 ${compact ? "w-full" : ""}`}>
       {facts.map((fact) => (
         <div
           key={fact.label}

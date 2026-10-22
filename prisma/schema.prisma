@@ -113,6 +113,7 @@ model RentalAgreement {
   agreementNumber  String   @unique @db.VarChar(40)
   assetId          String
   tenantId         String
+  agreementYear    Int
   startDate        DateTime @db.Date
   endDate          DateTime @db.Date
   monthlyRent      Int
@@ -123,6 +124,7 @@ model RentalAgreement {
   asset            Asset    @relation(fields: [assetId], references: [id], onDelete: Restrict)
   tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
 
+  @@unique([tenantId, assetId, agreementYear])
   @@index([assetId, startDate, endDate])
   @@index([tenantId, startDate])
   @@map("rental_agreements")
