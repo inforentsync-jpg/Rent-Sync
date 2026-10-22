@@ -1,0 +1,8 @@
+node_modules/
+.next/
+.env*
+!.env.example
+.rent-sync-dev-data.json
+.rent-sync-dev-data.json.*.tmp
+*.tsbuildinfo
+coverage/

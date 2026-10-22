@@ -1,0 +1,133 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Building {
+  id          String   @id @default(cuid())
+  name        String   @db.VarChar(160)
+  address     String   @db.VarChar(255)
+  city        String   @db.VarChar(100)
+  state       String   @db.VarChar(100)
+  postalCode  String   @db.VarChar(12)
+  ownerName   String   @db.VarChar(120)
+  ownerMobile String   @db.VarChar(15)
+  ownerId     String?
+  companyId   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  owner       PropertyOwner? @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  company     Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  assets      Asset[]
+
+  @@index([createdAt])
+  @@index([ownerId])
+  @@index([companyId])
+  @@map("buildings")
+}
+
+model PropertyOwner {
+  id           String     @id @default(cuid())
+  fullName     String     @db.VarChar(120)
+  mobileNumber String     @unique @db.VarChar(15)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  buildings    Building[]
+  companies    Company[]
+  tenants      Tenant[]
+
+  @@map("property_owners")
+}
+
+model Company {
+  id        String     @id @default(cuid())
+  ownerId   String
+  name      String     @db.VarChar(160)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  owner     PropertyOwner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  buildings Building[]
+
+  @@index([ownerId])
+  @@map("companies")
+}
+
+model Asset {
+  id           String        @id @default(cuid())
+  buildingId   String
+  name         String        @db.VarChar(120)
+  assetType    String        @db.VarChar(60)
+  unitNumber   String        @db.VarChar(40)
+  monthlyRent  Int
+  securityDeposit Int        @default(0)
+  externalBuildingId String? @db.VarChar(40)
+  ward            String?  @db.VarChar(20)
+  createdAt       DateTime @default(now())
+  updatedAt    DateTime      @updatedAt
+  building     Building      @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  tenants      AssetTenant[]
+  agreements   RentalAgreement[]
+  agreementCounter AgreementCounter?
+
+  @@unique([buildingId, unitNumber])
+  @@index([buildingId])
+  @@map("assets")
+}
+
+model Tenant {
+  id           String        @id @default(cuid())
+  ownerId      String
+  fullName     String        @db.VarChar(120)
+  mobileNumber String?       @unique @db.VarChar(15)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  owner        PropertyOwner @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  assets       AssetTenant[]
+  agreements   RentalAgreement[]
+
+  @@index([ownerId])
+  @@map("tenants")
+}
+
+model AssetTenant {
+  id        String   @id @default(cuid())
+  assetId   String
+  tenantId  String
+  createdAt DateTime @default(now())
+  asset     Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, tenantId])
+  @@index([tenantId])
+  @@map("asset_tenants")
+}
+
+model RentalAgreement {
+  id               String   @id @default(cuid())
+  agreementNumber  String   @unique @db.VarChar(40)
+  assetId          String
+  tenantId         String
+  startDate        DateTime @db.Date
+  endDate          DateTime @db.Date
+  monthlyRent      Int
+  securityDeposit  Int      @default(0)
+  terms            String   @db.Text
+  status           String   @default("ACTIVE") @db.VarChar(20)
+  createdAt        DateTime @default(now())
+  asset            Asset    @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([assetId, startDate, endDate])
+  @@index([tenantId, startDate])
+  @@map("rental_agreements")
+}
+
+model AgreementCounter {
+  assetId   String   @id
+  nextValue Int      @default(1)
+  asset     Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+}
