@@ -22,6 +22,7 @@ export type DevOwner = {
   fullName: string;
   mobileNumber: string;
   email?: string | null;
+  passwordHash?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -237,15 +238,24 @@ export function updateDevOwnerProfile(
   mobileNumber: string,
   fullName: string,
   email: string | null,
+  passwordHash?: string,
 ) {
   return withStore(async (store) => {
     const owner = store.owners.find((entry) => entry.mobileNumber === mobileNumber);
     if (!owner) return null;
     owner.fullName = fullName;
     owner.email = email;
+    if (passwordHash) owner.passwordHash = passwordHash;
     owner.updatedAt = new Date().toISOString();
     await writeStore(store);
     return owner;
+  });
+}
+
+export function getDevOwnerPasswordHash(mobileNumber: string) {
+  return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === mobileNumber);
+    return owner?.passwordHash ?? null;
   });
 }
 

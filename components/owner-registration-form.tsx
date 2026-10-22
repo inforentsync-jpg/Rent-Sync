@@ -119,7 +119,7 @@ export default function OwnerRegistrationForm() {
         </button>
         {message && <p role="status" className={`mt-3 rounded-lg px-3 py-2 text-[11px] leading-4 ${message.includes("Test OTP:") ? "bg-[#eef7f0] text-[#276142]" : "bg-[#fff4ed] text-[#995634]"}`}>{message}</p>}
         <p className="mt-3 text-[10px] leading-4 text-[#a0aaa3]">Local testing only: OTP 1234 is displayed here; no SMS is sent. Public registration needs a real OTP provider.</p>
-        <Link href="/#login" className="mt-5 block text-center text-[11px] font-semibold text-[#176b4b] hover:underline">Already have an account? Sign in</Link>
+        <Link href="/owner/login" className="mt-5 block text-center text-[11px] font-semibold text-[#176b4b] hover:underline">Already have an account? Sign in</Link>
       </section>
     </main>
   );

@@ -66,11 +66,12 @@ export default function HomePage() {
               <span className="h-px flex-1 bg-[#edf0ed]" /> More ways to get started <span className="h-px flex-1 bg-[#edf0ed]" />
             </div>
             <div id="portals" className="grid grid-cols-2 gap-3">
-              <Link href="/owner/register" className="group rounded-2xl border border-[#e8eee9] p-4 transition hover:border-[#b9d6c3] hover:bg-[#f8fbf8]">
+              <div className="rounded-2xl border border-[#e8eee9] p-4 transition hover:border-[#b9d6c3] hover:bg-[#f8fbf8]">
                 <span className="mb-3 grid size-9 place-items-center rounded-xl bg-[#f0f5f1] text-[#367450]"><Home size={17} /></span>
                 <span className="block text-[12px] font-semibold text-[#294335]">I&apos;m an owner</span>
-                <span className="mt-1 flex items-center gap-1 text-[10px] text-[#849188]">Create an account <ArrowRight size={11} className="transition group-hover:translate-x-0.5" /></span>
-              </Link>
+                <Link href="/owner/register" className="mt-1 flex items-center gap-1 text-[10px] text-[#849188] hover:text-[#176b4b]">Create account <ArrowRight size={11} /></Link>
+                <Link href="/owner/login" className="mt-2 flex items-center gap-1 text-[10px] font-semibold text-[#367450] hover:text-[#176b4b]">Sign in <ArrowRight size={11} /></Link>
+              </div>
               <Link href="/tenant/login" className="group rounded-2xl border border-[#e8eee9] p-4 transition hover:border-[#b9d6c3] hover:bg-[#f8fbf8]">
                 <span className="mb-3 grid size-9 place-items-center rounded-xl bg-[#f0f5f1] text-[#367450]"><KeyRound size={17} /></span>
                 <span className="block text-[12px] font-semibold text-[#294335]">I&apos;m a tenant</span>

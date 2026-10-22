@@ -10,12 +10,15 @@ type OwnerProfileData = {
   mobileNumber: string;
   email: string | null;
   createdAt: string;
+  passwordConfigured: boolean;
 };
 
 export default function OwnerProfile() {
   const [profile, setProfile] = useState<OwnerProfileData | null>(null);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [testOtp, setTestOtp] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -50,6 +53,14 @@ export default function OwnerProfile() {
 
   async function saveProfile(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (password && password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    if (password && password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
     setSaving(true);
     setError("");
     setMessage("");
@@ -57,13 +68,15 @@ export default function OwnerProfile() {
       const response = await fetch("/api/owner/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fullName, email }),
+        body: JSON.stringify({ fullName, email, password }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Unable to save your profile.");
       setProfile(payload.profile);
       setFullName(payload.profile.fullName);
       setEmail(payload.profile.email ?? "");
+      setPassword("");
+      setConfirmPassword("");
       setMessage("Profile saved.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to save your profile.");
@@ -130,6 +143,32 @@ export default function OwnerProfile() {
                 placeholder="you@example.com"
                 className="h-11 w-full rounded-xl border border-[#e3eae4] bg-[#fbfcfb] px-3 text-[13px] outline-none placeholder:text-[#abb5ad] focus:border-[#6eaa83]"
               />
+              <p className="mb-2 mt-6 text-[11px] font-semibold text-[#44574b]">Password configuration</p>
+              <label htmlFor="owner-profile-password" className="mb-2 mt-3 block text-[11px] font-medium text-[#65766a]">{profile.passwordConfigured ? "New password" : "Set password"}</label>
+              <input
+                id="owner-profile-password"
+                type="password"
+                autoComplete="new-password"
+                minLength={8}
+                maxLength={128}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="At least 8 characters"
+                className="h-11 w-full rounded-xl border border-[#e3eae4] bg-[#fbfcfb] px-3 text-[13px] outline-none placeholder:text-[#abb5ad] focus:border-[#6eaa83]"
+              />
+              <label htmlFor="owner-profile-password-confirm" className="mb-2 mt-3 block text-[11px] font-medium text-[#65766a]">Confirm password</label>
+              <input
+                id="owner-profile-password-confirm"
+                type="password"
+                autoComplete="new-password"
+                minLength={8}
+                maxLength={128}
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                placeholder="Re-enter password"
+                className="h-11 w-full rounded-xl border border-[#e3eae4] bg-[#fbfcfb] px-3 text-[13px] outline-none placeholder:text-[#abb5ad] focus:border-[#6eaa83]"
+              />
+              <p className="mt-2 text-[10px] leading-4 text-[#829087]">Password is stored securely as a hash. Leave both fields blank to keep your current password.</p>
               <button
                 type="submit"
                 disabled={saving}
@@ -151,7 +190,7 @@ export default function OwnerProfile() {
                 </div>
                 <div>
                   <dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#829087]">Password</dt>
-                  <dd className="mt-1 text-[13px] text-[#314b3b]">Not configured. Owner sign-in uses OTP.</dd>
+                  <dd className="mt-1 text-[13px] text-[#314b3b]">{profile.passwordConfigured ? "Configured — you can sign in with your password." : "Not configured — set one in Profile details to enable password sign-in."}</dd>
                 </div>
                 {testOtp && (
                   <div>

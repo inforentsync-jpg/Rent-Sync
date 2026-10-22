@@ -1,26 +1,35 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/database";
 import { getDevOwner, updateDevOwnerProfile } from "@/lib/dev-store";
+import { hashPassword } from "@/lib/password";
 import { getOwnerSession } from "@/lib/session";
 
 type ProfileInput = {
   fullName: string;
   email: string;
+  password?: string;
 };
 
 function isProfileInput(value: unknown): value is ProfileInput {
   if (value === null || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  return typeof record.fullName === "string" && typeof record.email === "string";
+  return (
+    typeof record.fullName === "string" &&
+    typeof record.email === "string" &&
+    (record.password === undefined || typeof record.password === "string")
+  );
 }
 
-function profileResponse(owner: {
+function profileResponse(
+  owner: {
   id: string;
   fullName: string;
   mobileNumber: string;
   email: string | null;
   createdAt: Date | string;
-}) {
+  },
+  passwordConfigured: boolean,
+) {
   return NextResponse.json(
     {
       profile: {
@@ -32,6 +41,7 @@ function profileResponse(owner: {
           owner.createdAt instanceof Date
             ? owner.createdAt.toISOString()
             : owner.createdAt,
+        passwordConfigured,
       },
       testOtp: process.env.NODE_ENV === "production" ? null : "1234",
     },
@@ -56,13 +66,17 @@ export async function GET() {
               fullName: true,
               mobileNumber: true,
               email: true,
+              passwordHash: true,
               createdAt: true,
             },
           });
     if (!owner) {
       return NextResponse.json({ error: "Owner account was not found." }, { status: 404 });
     }
-    return profileResponse({ ...owner, email: owner.email ?? null });
+    return profileResponse(
+      { ...owner, email: owner.email ?? null },
+      Boolean("passwordHash" in owner && owner.passwordHash),
+    );
   } catch (error) {
     console.error("Unable to load owner profile.", error);
     return NextResponse.json({ error: "Unable to load your profile." }, { status: 503 });
@@ -90,6 +104,7 @@ export async function PATCH(request: Request) {
 
   const fullName = body.fullName.trim();
   const email = body.email.trim().toLowerCase();
+  const password = body.password ?? "";
   if (fullName.length < 2 || fullName.length > 120) {
     return NextResponse.json(
       { error: "Enter your full name (2 to 120 characters)." },
@@ -99,11 +114,23 @@ export async function PATCH(request: Request) {
   if (email.length > 254 || (email !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
     return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
   }
+  if (password && (password.length < 8 || password.length > 128)) {
+    return NextResponse.json(
+      { error: "Password must be between 8 and 128 characters." },
+      { status: 400 },
+    );
+  }
 
   try {
+    const passwordHash = password ? await hashPassword(password) : undefined;
     const owner =
       process.env.NODE_ENV !== "production"
-        ? await updateDevOwnerProfile(session.mobileNumber, fullName, email || null)
+        ? await updateDevOwnerProfile(
+            session.mobileNumber,
+            fullName,
+            email || null,
+            passwordHash,
+          )
         : await (async () => {
             const currentOwner = await prisma.propertyOwner.findUnique({
               where: { mobileNumber: session.mobileNumber },
@@ -112,13 +139,18 @@ export async function PATCH(request: Request) {
             if (!currentOwner) return null;
             return prisma.propertyOwner.update({
               where: { id: currentOwner.id },
-              data: { fullName, email: email || null },
+              data: {
+                fullName,
+                email: email || null,
+                ...(passwordHash ? { passwordHash } : {}),
+              },
               select: {
                 id: true,
                 fullName: true,
                 mobileNumber: true,
                 email: true,
                 createdAt: true,
+                passwordHash: true,
               },
             });
           })();
@@ -126,7 +158,10 @@ export async function PATCH(request: Request) {
     if (!owner) {
       return NextResponse.json({ error: "Owner account was not found." }, { status: 404 });
     }
-    return profileResponse({ ...owner, email: owner.email ?? null });
+    return profileResponse(
+      { ...owner, email: owner.email ?? null },
+      Boolean("passwordHash" in owner && owner.passwordHash),
+    );
   } catch (error) {
     console.error("Unable to update owner profile.", error);
     return NextResponse.json({ error: "Unable to save your profile." }, { status: 503 });

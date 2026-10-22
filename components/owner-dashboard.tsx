@@ -65,21 +65,21 @@ type Portfolio = {
 };
 type FormKind = "company" | "building" | "asset" | "tenant" | "agreement";
 type ModuleKey = "companies" | "buildings" | "assets" | "tenants" | "agreements";
-type AgreementTab = "rent" | "terms" | "special-terms" | "exit-terms" | "advance" | "kyc";
-type TenantTab = "kyc" | "agreements";
+type AgreementTab = "kyc" | "rent" | "advance" | "terms" | "important-terms";
+type TenantTab = "kyc" | "assets" | "agreements";
 
 const tenantTabs: Array<{ id: TenantTab; label: string }> = [
   { id: "kyc", label: "KYC" },
+  { id: "assets", label: "Assets" },
   { id: "agreements", label: "Agreements" },
 ];
 
 const agreementTabs: Array<{ id: AgreementTab; label: string }> = [
   { id: "kyc", label: "KYC" },
   { id: "rent", label: "Rent" },
-  { id: "terms", label: "Terms" },
-  { id: "special-terms", label: "Special Terms" },
-  { id: "exit-terms", label: "Exit Terms" },
   { id: "advance", label: "Advance" },
+  { id: "terms", label: "Terms" },
+  { id: "important-terms", label: "Important Terms" },
 ];
 const moduleKeys: ModuleKey[] = ["companies", "buildings", "assets", "tenants", "agreements"];
 
@@ -493,9 +493,16 @@ export default function OwnerDashboard() {
   const selectedTenantAgreements = selectedTenant
     ? portfolio.agreements.filter((agreement) => agreement.tenantId === selectedTenant.id)
     : [];
+  const selectedTenantAssets = selectedTenant
+    ? portfolio.assets.filter((asset) => selectedTenant.assetIds.includes(asset.id))
+    : [];
 
   function handleOpenAgreement(agreementId: string) {
     syncModuleUrl("agreements", agreementId);
+  }
+
+  function handleOpenAsset(assetId: string) {
+    syncModuleUrl("assets", assetId);
   }
 
   return (
@@ -608,17 +615,14 @@ export default function OwnerDashboard() {
                       : <PanelMessage>No terms have been recorded for this agreement.</PanelMessage>}
                   </div>
                 ) : null}
-                {agreementTab === "special-terms" ? (
-                  <div className="sm:col-span-2"><PanelMessage>Special terms are not recorded separately for this agreement.</PanelMessage></div>
-                ) : null}
-                {agreementTab === "exit-terms" ? (
-                  <div className="sm:col-span-2"><PanelMessage>Exit terms are not recorded separately for this agreement.</PanelMessage></div>
-                ) : null}
                 {agreementTab === "advance" ? (
                   <div className="sm:col-span-2">
                     <DetailField label="Security deposit" value={selectedAgreement.securityDeposit === undefined ? "—" : `₹${selectedAgreement.securityDeposit.toLocaleString("en-IN")}`} />
                     <p className="mt-3 text-[10px] text-[#849188]">A separate advance amount is not stored for this agreement.</p>
                   </div>
+                ) : null}
+                {agreementTab === "important-terms" ? (
+                  <div className="sm:col-span-2"><PanelMessage>Important terms are not recorded separately for this agreement.</PanelMessage></div>
                 ) : null}
               </div>
             </article>
@@ -660,6 +664,51 @@ export default function OwnerDashboard() {
                     <DetailField label="Mobile number" value={selectedTenant.mobileNumber ? `+${selectedTenant.mobileNumber}` : "Phone not provided"} />
                     <div className="sm:col-span-2"><PanelMessage>KYC documents are not available for this tenant yet.</PanelMessage></div>
                   </div>
+                ) : null}
+                {tenantTab === "assets" ? (
+                  selectedTenantAssets.length ? (
+                    <div className="overflow-x-auto">
+                      <table aria-label="Currently assigned tenant assets" className="w-full min-w-[680px] border-collapse text-left">
+                        <thead className="bg-[#f7faf7] text-[9px] font-semibold uppercase tracking-[0.1em] text-[#718078]">
+                          <tr>
+                            <th scope="col" className="px-5 py-3">Asset ID</th>
+                            <th scope="col" className="px-5 py-3">Asset</th>
+                            <th scope="col" className="px-5 py-3">Building</th>
+                            <th scope="col" className="px-5 py-3">Rent / month</th>
+                            <th scope="col" className="px-5 py-3">Advance</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#edf0ed]">
+                          {selectedTenantAssets.map((asset) => {
+                            const building = portfolio.buildings.find((entry) => entry.id === asset.buildingId);
+                            return (
+                              <tr
+                                key={asset.id}
+                                role="link"
+                                tabIndex={0}
+                                onClick={() => handleOpenAsset(asset.id)}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    handleOpenAsset(asset.id);
+                                  }
+                                }}
+                                className="cursor-pointer text-[11px] text-[#33473a] transition hover:bg-[#f7faf7] focus:bg-[#f7faf7] focus:outline-none"
+                              >
+                                <td className="px-5 py-4 font-semibold text-[#203328]">{asset.unitNumber}</td>
+                                <td className="px-5 py-4">{asset.name}</td>
+                                <td className="px-5 py-4">{building?.name ?? "—"}</td>
+                                <td className="px-5 py-4">₹{asset.monthlyRent.toLocaleString("en-IN")}</td>
+                                <td className="px-5 py-4">₹{asset.securityDeposit.toLocaleString("en-IN")}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="px-5 py-6 text-[11px] text-[#849188]">No assets are currently assigned to this tenant.</p>
+                  )
                 ) : null}
                 {tenantTab === "agreements" ? (
                   <div>
