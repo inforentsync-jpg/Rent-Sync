@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   Pressable,
   Platform,
@@ -23,9 +24,11 @@ import {
   KeyRound,
   LogOut,
   Plus,
+  Pencil,
   ShieldCheck,
   Share2,
   UsersRound,
+  Trash2,
   X,
 } from "lucide-react-native";
 import {
@@ -43,12 +46,14 @@ import {
   approveAgreement,
   authenticatedRequest,
   createPortfolioItem,
+  deletePortfolioItem,
   getAdminAccounts,
   getOwnerPortfolio,
   getTenantAgreements,
   resetAccountPassword,
   shareAgreementPdf,
   updateOwnerProfile,
+  updatePortfolioItem,
 } from "@/lib/api";
 import { clearSession, type MobileSession } from "@/lib/session";
 import { colors } from "@/theme";
@@ -138,8 +143,14 @@ type ReviewValues = {
   importantTerms: string;
 };
 
-type CreateKind = "company" | "building" | "asset" | "tenant";
+type CreateKind = "company" | "building" | "asset" | "tenant" | "agreement";
 type AdminType = "OWNER" | "TENANT";
+type EditableItem =
+ | { kind: "company"; item: Company }
+ | { kind: "building"; item: Building }
+ | { kind: "asset"; item: Asset }
+ | { kind: "tenant"; item: Tenant }
+ | { kind: "agreement"; item: Agreement };
 
 function dateOnly(value?: string | null) {
   if (!value) return "";
@@ -208,6 +219,7 @@ export default function WorkspaceScreen({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [createKind, setCreateKind] = useState<CreateKind | null>(null);
+  const [editingItem, setEditingItem] = useState<EditableItem | null>(null);
   const [reviewing, setReviewing] = useState<Agreement | null>(null);
   const [resetAccount, setResetAccount] = useState<{ account: Account; type: AdminType } | null>(null);
 
@@ -254,6 +266,25 @@ export default function WorkspaceScreen({
     onSignedOut();
   }
 
+  async function removePortfolioItem(kind: string, id: string, label: string) {
+    const remove = async () => {
+      try {
+        await deletePortfolioItem(session, kind, id);
+        refresh();
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : `Unable to delete ${label}.`);
+      }
+    };
+    if (Platform.OS === "web") {
+      if (globalThis.confirm(`Delete ${label}? This action cannot be undone.`)) await remove();
+      return;
+    }
+    Alert.alert(`Delete ${label}?`, "This action cannot be undone.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: () => void remove() },
+    ]);
+  }
+
   const sections =
     session.role === "SUPER_ADMIN"
       ? ["Owners", "Tenants"]
@@ -279,9 +310,11 @@ export default function WorkspaceScreen({
             </Text>
           </View>
         </View>
-        <Pressable accessibilityRole="button" accessibilityLabel="Sign out" onPress={() => void signOut()} style={styles.signOut}>
-          <LogOut size={17} color={colors.forest} />
-        </Pressable>
+        {session.role !== "OWNER" ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="Sign out" onPress={() => void signOut()} style={styles.signOut}>
+            <LogOut size={17} color={colors.forest} />
+          </Pressable>
+        ) : null}
       </View>
 
       {session.role === "SUPER_ADMIN" ? (
@@ -335,8 +368,11 @@ export default function WorkspaceScreen({
               profile={profile}
               session={session}
               onCreate={setCreateKind}
+              onEdit={setEditingItem}
+              onDelete={removePortfolioItem}
               onReview={setReviewing}
               onProfileSaved={loadData}
+              onSignOut={() => void signOut()}
             />
           ) : null}
           {session.role === "OWNER" && !portfolio && error ? (
@@ -364,13 +400,18 @@ export default function WorkspaceScreen({
       )}
 
       <CreateSheet
-        key={createKind ?? "create-closed"}
-        kind={createKind}
+        key={editingItem ? `edit-${editingItem.kind}-${editingItem.item.id}` : createKind ?? "create-closed"}
+        kind={editingItem?.kind ?? createKind}
+        item={editingItem}
         portfolio={portfolio}
         session={session}
-        onClose={() => setCreateKind(null)}
+        onClose={() => {
+          setCreateKind(null);
+          setEditingItem(null);
+        }}
         onCreated={() => {
           setCreateKind(null);
+          setEditingItem(null);
           refresh();
         }}
       />
@@ -406,16 +447,22 @@ function OwnerWorkspace({
   profile,
   session,
   onCreate,
+  onEdit,
+  onDelete,
   onReview,
   onProfileSaved,
+  onSignOut,
 }: {
   section: string;
   portfolio: Portfolio;
   profile: Profile | null;
   session: MobileSession;
   onCreate: (kind: CreateKind) => void;
+  onEdit: (selection: EditableItem) => void;
+  onDelete: (kind: string, id: string, label: string) => void;
   onReview: (agreement: Agreement) => void;
   onProfileSaved: () => Promise<void>;
+  onSignOut: () => void;
 }) {
   const assetById = useMemo(
     () => new Map(portfolio.assets.map((asset) => [asset.id, asset])),
@@ -454,6 +501,16 @@ function OwnerWorkspace({
             role="OWNER"
             session={session}
             onReview={() => onReview(agreement)}
+            onDelete={
+              agreement.status === "DRAFT" && !agreement.ownerApprovedAt && !agreement.tenantApprovedAt
+                ? () => onDelete("agreement", agreement.id, "this draft agreement")
+                : undefined
+            }
+            onEdit={
+                agreement.status === "DRAFT" && !agreement.ownerApprovedAt && !agreement.tenantApprovedAt
+                  ? () => onEdit({ kind: "agreement", item: agreement })
+                  : undefined
+            }
           />
         )) : <EmptyState title="No agreements yet" text="Add a tenant to prepare the first agreement." />}
       </>
@@ -486,6 +543,10 @@ function OwnerWorkspace({
                   ) : null}
                 </View>
               </View>
+              <View style={styles.recordActions}>
+                <RecordAction label="Edit tenant" icon={<Pencil size={14} color={colors.forest} />} onPress={() => onEdit({ kind: "tenant", item: tenant })} />
+                <RecordAction label="Delete tenant" danger icon={<Trash2 size={14} color={colors.danger} />} onPress={() => onDelete("tenant", tenant.id, tenant.fullName)} />
+              </View>
             </Panel>
           );
         }) : <EmptyState title="No tenants yet" text="Add a tenant to connect them with a home and agreement." />}
@@ -502,6 +563,7 @@ function OwnerWorkspace({
           session={session}
           profile={profile}
           onSaved={onProfileSaved}
+          onSignOut={onSignOut}
         />
         <Panel>
           <Text style={styles.cardTitle}>Sign-in number</Text>
@@ -533,8 +595,26 @@ function OwnerWorkspace({
           <QuickAction label="Property" onPress={() => onCreate("building")} />
           <QuickAction label="Unit" onPress={() => onCreate("asset")} />
           <QuickAction label="Tenant" onPress={() => onCreate("tenant")} />
+          <QuickAction label="Agreement" onPress={() => onCreate("agreement")} />
         </View>
       </Panel>
+      {portfolio.companies.length ? (
+        <>
+          <Heading title="Companies" subtitle={`${portfolio.companies.length} total`} />
+          {portfolio.companies.map((company) => (
+            <Panel key={company.id}>
+              <View style={styles.inlineHeading}>
+                <View style={styles.propertyIcon}><Building2 size={17} color={colors.forest} /></View>
+                <Text style={[styles.cardTitle, styles.flexOne]}>{company.name}</Text>
+              </View>
+              <View style={styles.recordActions}>
+                <RecordAction label="Edit company" icon={<Pencil size={14} color={colors.forest} />} onPress={() => onEdit({ kind: "company", item: company })} />
+                <RecordAction label="Delete company" danger icon={<Trash2 size={14} color={colors.danger} />} onPress={() => onDelete("company", company.id, company.name)} />
+              </View>
+            </Panel>
+          ))}
+        </>
+      ) : null}
       <Heading title="Your properties" subtitle={`${portfolio.buildings.length} total`} />
       {portfolio.buildings.length ? portfolio.buildings.map((building) => {
         const company = portfolio.companies.find((item) => item.id === building.companyId);
@@ -550,14 +630,24 @@ function OwnerWorkspace({
               {units.length ? <Text style={styles.countPill}>{units.length} units</Text> : null}
             </View>
             {company ? <Text style={styles.unitHint}>{company.name}</Text> : null}
-            {units.slice(0, 3).map((asset) => {
+            <View style={styles.recordActions}>
+              <RecordAction label="Edit property" icon={<Pencil size={14} color={colors.forest} />} onPress={() => onEdit({ kind: "building", item: building })} />
+              <RecordAction label="Delete property" danger icon={<Trash2 size={14} color={colors.danger} />} onPress={() => onDelete("building", building.id, building.name)} />
+            </View>
+            {units.map((asset) => {
               const currentTenant = (asset.tenantIds ?? []).map((id) => tenantById.get(id)).find(Boolean);
               return (
-                <View key={asset.id} style={styles.unitRow}>
-                  <DoorOpen size={14} color={colors.leaf} />
-                  <Text style={styles.unitName}>{asset.name} · {asset.unitNumber}</Text>
-                  <Text style={styles.unitRent}>{money(asset.monthlyRent)}</Text>
-                  {currentTenant ? <Text style={styles.unitTenant}>{currentTenant.fullName}</Text> : null}
+                <View key={asset.id} style={styles.unitBlock}>
+                  <View style={styles.unitRow}>
+                    <DoorOpen size={14} color={colors.leaf} />
+                    <Text style={styles.unitName}>{asset.name} · {asset.unitNumber}</Text>
+                    <Text style={styles.unitRent}>{money(asset.monthlyRent)}</Text>
+                    {currentTenant ? <Text style={styles.unitTenant}>{currentTenant.fullName}</Text> : null}
+                  </View>
+                  <View style={styles.recordActions}>
+                    <RecordAction label="Edit unit" icon={<Pencil size={14} color={colors.forest} />} onPress={() => onEdit({ kind: "asset", item: asset })} />
+                    <RecordAction label="Delete unit" danger icon={<Trash2 size={14} color={colors.danger} />} onPress={() => onDelete("asset", asset.id, asset.name)} />
+                  </View>
                 </View>
               );
             })}
@@ -771,6 +861,30 @@ function IconButton({ label, onPress }: { label: string; onPress: () => void }) 
   );
 }
 
+function RecordAction({
+  label,
+  icon,
+  onPress,
+  danger = false,
+}: {
+  label: string;
+  icon: ReactNode;
+  onPress: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={({ pressed }) => [styles.recordAction, danger && styles.recordActionDanger, pressed && styles.pressed]}
+    >
+      {icon}
+      <Text style={[styles.recordActionText, danger && styles.recordActionTextDanger]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 function AgreementCard({
   agreement,
   asset,
@@ -778,6 +892,8 @@ function AgreementCard({
   role,
   session,
   onReview,
+  onEdit,
+  onDelete,
 }: {
   agreement: Agreement;
   asset?: Asset;
@@ -785,6 +901,8 @@ function AgreementCard({
   role: "OWNER" | "TENANT";
   session?: MobileSession;
   onReview: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }) {
   const [sharing, setSharing] = useState(false);
   const [shareError, setShareError] = useState("");
@@ -829,6 +947,15 @@ function AgreementCard({
           compact
         />
       ) : null}
+      {onEdit ? (
+        <ActionButton
+          label="Edit draft"
+          variant="secondary"
+          onPress={onEdit}
+          icon={<Pencil size={14} color={colors.forest} />}
+          compact
+        />
+      ) : null}
       {role === "OWNER" && session && Platform.OS !== "web" ? (
         <ActionButton
           label="Share PDF"
@@ -836,6 +963,15 @@ function AgreementCard({
           onPress={() => void sharePdf()}
           busy={sharing}
           icon={<Share2 size={15} color={colors.forest} />}
+          compact
+        />
+      ) : null}
+      {onDelete ? (
+        <ActionButton
+          label="Delete draft"
+          variant="danger"
+          onPress={onDelete}
+          icon={<Trash2 size={14} color={colors.danger} />}
           compact
         />
       ) : null}
@@ -874,10 +1010,12 @@ function ProfilePanel({
   session,
   profile,
   onSaved,
+  onSignOut,
 }: {
   session: MobileSession;
   profile: Profile | null;
   onSaved: () => Promise<void>;
+  onSignOut: () => void;
 }) {
   const [fullName, setFullName] = useState(profile?.fullName ?? "");
   const [email, setEmail] = useState(profile?.email ?? "");
@@ -907,24 +1045,78 @@ function ProfilePanel({
       <Field label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
       {notice ? <Notice message={notice} tone={noticeTone} /> : null}
       <ActionButton label="Save profile" onPress={() => void save()} busy={busy} />
+      <Divider />
+      <Text style={styles.cardTitle}>Account session</Text>
+      <Text style={styles.mutedSmall}>Sign out of your Rent-Sync owner account on this device.</Text>
+      <ActionButton
+        label="Sign out"
+        variant="danger"
+        onPress={onSignOut}
+        icon={<LogOut size={15} color={colors.danger} />}
+      />
     </Panel>
   );
 }
 
+function initialEditFields(selection: EditableItem): Record<string, string> {
+  switch (selection.kind) {
+    case "company":
+      return { name: selection.item.name };
+    case "building":
+      return {
+        companyId: selection.item.companyId ?? "",
+        name: selection.item.name,
+        address: selection.item.address,
+        city: selection.item.city,
+        state: selection.item.state,
+        postalCode: selection.item.postalCode,
+      };
+    case "asset":
+      return {
+        buildingId: selection.item.buildingId ?? "",
+        name: selection.item.name,
+        assetType: selection.item.assetType,
+        unitNumber: selection.item.unitNumber,
+        monthlyRent: String(selection.item.monthlyRent),
+        securityDeposit: String(selection.item.securityDeposit),
+      };
+    case "tenant":
+      return {
+        fullName: selection.item.fullName,
+        mobileNumber: selection.item.mobileNumber ?? "",
+      };
+    case "agreement":
+      return {
+        startDate: dateOnly(selection.item.startDate),
+        endDate: dateOnly(selection.item.endDate),
+        assetId: selection.item.assetId ?? "",
+        tenantId: selection.item.tenantId ?? "",
+        monthlyRent: String(selection.item.monthlyRent),
+        securityDeposit: String(selection.item.securityDeposit),
+        terms: selection.item.terms ?? "",
+        importantTerms: selection.item.importantTerms ?? "",
+      };
+  }
+}
+
 function CreateSheet({
   kind,
+  item,
   portfolio,
   session,
   onClose,
   onCreated,
 }: {
   kind: CreateKind | null;
+  item: EditableItem | null;
   portfolio: Portfolio | null;
   session: MobileSession;
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [fields, setFields] = useState<Record<string, string>>(() => ({ startDate: localToday() }));
+  const [fields, setFields] = useState<Record<string, string>>(() =>
+    item ? initialEditFields(item) : { startDate: localToday() },
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -960,6 +1152,27 @@ function CreateSheet({
           monthlyRent: Number(fields.monthlyRent),
           securityDeposit: Number(fields.securityDeposit || 0),
         };
+      } else if (kind === "agreement") {
+        body = {
+          kind,
+          ...(item ? { id: item.item.id } : {}),
+          assetId: fields.assetId ?? "",
+          tenantId: fields.tenantId ?? "",
+          startDate: fields.startDate ?? "",
+          endDate: fields.endDate ?? "",
+          monthlyRent: Number(fields.monthlyRent),
+          securityDeposit: Number(fields.securityDeposit || 0),
+          terms: fields.terms ?? "",
+          importantTerms: fields.importantTerms ?? "",
+        };
+      } else if (item?.kind === "tenant") {
+        const digits = (fields.mobileNumber ?? "").replace(/\D/g, "");
+        body = {
+          kind,
+          id: item.item.id,
+          fullName: fields.fullName ?? "",
+          mobileNumber: digits.length === 10 ? `91${digits}` : digits,
+        };
       } else {
         const digits = (fields.mobileNumber ?? "").replace(/\D/g, "");
         const mobile = digits.length === 10 ? `91${digits}` : digits;
@@ -971,7 +1184,12 @@ function CreateSheet({
           startDate: fields.startDate ?? "",
         };
       }
-      await createPortfolioItem(session, body);
+      if (item) {
+        body.id = item.item.id;
+        await updatePortfolioItem(session, body);
+      } else {
+        await createPortfolioItem(session, body);
+      }
       onCreated();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to create this item.");
@@ -981,10 +1199,20 @@ function CreateSheet({
   }
 
   const title =
-    kind === "company" ? "Add company" :
-      kind === "building" ? "Add property" :
-        kind === "asset" ? "Add unit" :
-          kind === "tenant" ? "Add tenant" : "";
+    kind === "company" ? `${item ? "Edit" : "Add"} company` :
+      kind === "building" ? `${item ? "Edit" : "Add"} property` :
+        kind === "asset" ? `${item ? "Edit" : "Add"} unit` :
+          kind === "tenant" ? `${item ? "Edit" : "Add"} tenant` :
+            kind === "agreement" ? `${item ? "Edit" : "Add"} agreement` : "";
+  const availableAssets = (portfolio?.assets ?? []).filter(
+    (asset) => !portfolio?.tenants.some((tenant) => tenant.assetIds?.includes(asset.id)),
+  );
+  const agreementTenants = (portfolio?.tenants ?? []).filter(
+    (tenant) => tenant.assetIds?.includes(fields.assetId ?? ""),
+  );
+  const agreementAssets = (portfolio?.assets ?? []).filter((asset) =>
+    portfolio?.tenants.some((tenant) => tenant.assetIds?.includes(asset.id)),
+  );
 
   return (
     <Modal visible={Boolean(kind)} animationType="slide" transparent onRequestClose={onClose}>
@@ -995,7 +1223,7 @@ function CreateSheet({
           <View style={styles.sheetHeading}>
             <View>
               <Text style={styles.sheetTitle}>{title}</Text>
-              <Text style={styles.mutedSmall}>Add details to your portfolio</Text>
+              <Text style={styles.mutedSmall}>{item ? "Update portfolio details" : "Add details to your portfolio"}</Text>
             </View>
             <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} style={styles.closeButton}>
               <X size={19} color={colors.ink} />
@@ -1033,21 +1261,48 @@ function CreateSheet({
             ) : null}
             {kind === "tenant" ? (
               <>
-                <SelectField label="Rental unit" options={portfolio?.assets.map((item) => ({ id: item.id, label: `${item.name} · ${item.unitNumber}` })) ?? []} value={fields.assetId ?? ""} onChange={(value) => set("assetId", value)} />
+                {!item ? <SelectField label="Rental unit" options={availableAssets.map((asset) => ({ id: asset.id, label: `${asset.name} · ${asset.unitNumber}` }))} value={fields.assetId ?? ""} onChange={(value) => set("assetId", value)} /> : null}
                 <Field label="Tenant name" value={fields.fullName ?? ""} onChangeText={(value) => set("fullName", value)} autoCapitalize="words" />
                 <Field label="Mobile number (optional)" value={fields.mobileNumber ?? ""} onChangeText={(value) => set("mobileNumber", value)} keyboardType="phone-pad" maxLength={15} />
-                <Field label="Agreement start date" value={fields.startDate ?? ""} onChangeText={(value) => set("startDate", value)} placeholder="YYYY-MM-DD" />
-                <Text style={styles.formHint}>An 11-month draft agreement will be created with this tenant.</Text>
+                {!item ? <Field label="Agreement start date" value={fields.startDate ?? ""} onChangeText={(value) => set("startDate", value)} placeholder="YYYY-MM-DD" /> : null}
+                {!item ? <Text style={styles.formHint}>An 11-month draft agreement will be created with this tenant.</Text> : null}
               </>
             ) : null}
-            {kind && ((kind === "building" && !portfolio?.companies.length) || (kind === "asset" && !portfolio?.buildings.length) || (kind === "tenant" && !portfolio?.assets.length)) ? (
-              <Notice message={kind === "building" ? "Add a company before creating a property." : kind === "asset" ? "Add a property before creating a unit." : "Add a unit before creating a tenant."} />
+            {kind === "agreement" ? (
+              <>
+                {!item ? (
+                  <>
+                    <SelectField label="Rental unit" options={agreementAssets.map((asset) => ({ id: asset.id, label: `${asset.name} · ${asset.unitNumber}` }))} value={fields.assetId ?? ""} onChange={(value) => {
+                      set("assetId", value);
+                      set("tenantId", "");
+                    }} />
+                    <SelectField label="Tenant" options={agreementTenants.map((tenant) => ({ id: tenant.id, label: tenant.fullName }))} value={fields.tenantId ?? ""} onChange={(value) => set("tenantId", value)} />
+                  </>
+                ) : (
+                  <Text style={styles.formHint}>Only unapproved draft agreements can be edited.</Text>
+                )}
+                <Field label="Start date" value={fields.startDate ?? ""} onChangeText={(value) => set("startDate", value)} placeholder="YYYY-MM-DD" />
+                <Field label="End date" value={fields.endDate ?? ""} onChangeText={(value) => set("endDate", value)} placeholder="YYYY-MM-DD" />
+                <View style={styles.formRow}>
+                  <Field label="Monthly rent (₹)" value={fields.monthlyRent ?? ""} onChangeText={(value) => set("monthlyRent", value.replace(/\D/g, ""))} keyboardType="number-pad" style={styles.halfField} />
+                  <Field label="Deposit (₹)" value={fields.securityDeposit ?? ""} onChangeText={(value) => set("securityDeposit", value.replace(/\D/g, ""))} keyboardType="number-pad" style={styles.halfField} />
+                </View>
+                <Field label="Agreement terms" value={fields.terms ?? ""} onChangeText={(value) => set("terms", value)} multiline numberOfLines={4} maxLength={2000} style={styles.multilineField} />
+                <Field label="Important terms" value={fields.importantTerms ?? ""} onChangeText={(value) => set("importantTerms", value)} multiline numberOfLines={4} maxLength={4000} style={styles.multilineField} />
+              </>
+            ) : null}
+            {!item && kind && ((kind === "building" && !portfolio?.companies.length) || (kind === "asset" && !portfolio?.buildings.length) || (kind === "tenant" && !availableAssets.length)) ? (
+              <Notice message={kind === "building" ? "Add a company before creating a property." : kind === "asset" ? "Add a property before creating a unit." : "All units are already assigned to tenants. Add an available unit first."} />
             ) : null}
             {error ? <Notice message={error} /> : null}
-            <ActionButton label={title} onPress={() => void submit()} busy={busy} disabled={
-              Boolean(kind === "building" && !portfolio?.companies.length) ||
+            {kind === "agreement" && !item && !agreementAssets.length ? (
+              <Notice message="Assign a tenant to a unit before adding an agreement." />
+            ) : null}
+            <ActionButton label={item ? "Save changes" : title} onPress={() => void submit()} busy={busy} disabled={
+              !item && (Boolean(kind === "building" && !portfolio?.companies.length) ||
               Boolean(kind === "asset" && !portfolio?.buildings.length) ||
-              Boolean(kind === "tenant" && !portfolio?.assets.length)
+              Boolean(kind === "tenant" && !availableAssets.length) ||
+              Boolean(kind === "agreement" && !agreementAssets.length))
             } />
           </ScrollView>
         </View>
@@ -1166,15 +1421,30 @@ function ReviewSheet({
               <X size={19} color={colors.ink} />
             </Pressable>
           </View>
-          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetFields}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.reviewSteps}>
-              {steps.map((label, index) => (
-                <Pressable key={label} onPress={() => setStep(index)} style={[styles.reviewStep, step === index && styles.reviewStepActive]}>
-                  <Text style={[styles.reviewStepText, step === index && styles.reviewStepTextActive]}>{label}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-            <Text style={styles.stepCounter}>STEP {step + 1} OF {steps.length}</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.reviewSteps}
+          >
+            {steps.map((label, index) => (
+              <Pressable
+                key={label}
+                accessibilityRole="button"
+                accessibilityState={{ selected: step === index }}
+                onPress={() => setStep(index)}
+                style={[styles.reviewStep, step === index && styles.reviewStepActive]}
+              >
+                <Text style={[styles.reviewStepText, step === index && styles.reviewStepTextActive]}>{label}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+          <Text style={styles.stepCounter}>STEP {step + 1} OF {steps.length}</Text>
+          <ScrollView
+            style={styles.reviewContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.sheetFields}
+          >
             {step === 0 ? (
               <Panel style={styles.reviewInfo}>
                 <Text style={styles.cardTitle}>People and home</Text>
@@ -1214,17 +1484,21 @@ function ReviewSheet({
               </Panel>
             ) : null}
             {error ? <Notice message={error} /> : null}
-            <View style={styles.reviewActions}>
-              {step > 0 ? (
+          </ScrollView>
+          <View style={styles.reviewActions}>
+            {step > 0 ? (
+              <View style={styles.reviewActionButton}>
                 <ActionButton label="Back" variant="secondary" onPress={() => setStep((current) => current - 1)} />
-              ) : null}
+              </View>
+            ) : null}
+            <View style={styles.reviewActionButton}>
               {step < steps.length - 1 ? (
                 <ActionButton label="Continue" onPress={() => setStep((current) => current + 1)} icon={<ChevronRight size={17} color={colors.white} />} />
               ) : (
                 <ActionButton label={`Approve as ${roleLabel}`} onPress={() => void approve()} busy={busy} icon={<Check size={16} color={colors.white} />} />
               )}
             </View>
-          </ScrollView>
+          </View>
         </View>
       </View>
     </Modal>
@@ -1351,9 +1625,15 @@ const styles = StyleSheet.create({
   unitName: { flex: 1, color: colors.ink, fontSize: 11, fontWeight: "600" },
   unitRent: { color: colors.forest, fontSize: 11, fontWeight: "700" },
   unitTenant: { width: "100%", paddingLeft: 21, color: colors.muted, fontSize: 10 },
+  unitBlock: { gap: 3 },
   personRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   avatar: { width: 38, height: 38, borderRadius: 14, backgroundColor: colors.mint, alignItems: "center", justifyContent: "center" },
   iconButton: { width: 37, height: 37, borderRadius: 12, backgroundColor: colors.mint, alignItems: "center", justifyContent: "center" },
+  recordActions: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 2 },
+  recordAction: { minHeight: 36, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, borderRadius: 11, backgroundColor: colors.mint, paddingHorizontal: 10 },
+  recordActionDanger: { backgroundColor: colors.dangerWash },
+  recordActionText: { color: colors.forest, fontSize: 10, fontWeight: "700" },
+  recordActionTextDanger: { color: colors.danger },
   accountPanel: { gap: 12 },
   agreementPanel: { gap: 11 },
   agreementHeading: { flexDirection: "row", alignItems: "flex-start", gap: 9 },
@@ -1380,7 +1660,7 @@ const styles = StyleSheet.create({
   reviewInfo: { backgroundColor: "#F8FAF7" },
   modalRoot: { flex: 1, justifyContent: "flex-end" },
   modalShade: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(12,27,20,0.44)" },
-  sheet: { maxHeight: "92%", backgroundColor: colors.background, borderTopLeftRadius: 25, borderTopRightRadius: 25, paddingHorizontal: 18, paddingTop: 10, paddingBottom: 25, gap: 14 },
+  sheet: { height: "92%", maxHeight: "92%", backgroundColor: colors.background, borderTopLeftRadius: 25, borderTopRightRadius: 25, paddingHorizontal: 18, paddingTop: 10, paddingBottom: 18, gap: 10 },
   sheetHandle: { alignSelf: "center", width: 38, height: 4, borderRadius: 99, backgroundColor: "#CDD5CD" },
   sheetHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   sheetTitle: { color: colors.ink, fontSize: 18, fontWeight: "800" },
@@ -1398,7 +1678,9 @@ const styles = StyleSheet.create({
   reviewStepText: { color: colors.muted, fontSize: 10, fontWeight: "700" },
   reviewStepTextActive: { color: colors.white },
   stepCounter: { color: colors.leaf, fontSize: 9, fontWeight: "800", letterSpacing: 0.8 },
-  reviewActions: { flexDirection: "row", gap: 9 },
+  reviewContent: { flex: 1, minHeight: 0 },
+  reviewActions: { flexDirection: "row", flexShrink: 0, gap: 9, paddingTop: 2 },
+  reviewActionButton: { flex: 1 },
   multilineField: { minHeight: 140 },
   pressed: { opacity: 0.8 },
 });

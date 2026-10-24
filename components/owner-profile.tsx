@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ArrowLeft, LoaderCircle, Save, UserRound } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, LoaderCircle, LogOut, Save, UserRound } from "lucide-react";
 
 type OwnerProfileData = {
   id: string;
@@ -14,6 +15,7 @@ type OwnerProfileData = {
 };
 
 export default function OwnerProfile() {
+  const router = useRouter();
   const [profile, setProfile] = useState<OwnerProfileData | null>(null);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -22,6 +24,7 @@ export default function OwnerProfile() {
   const [testOtp, setTestOtp] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -82,6 +85,20 @@ export default function OwnerProfile() {
       setError(cause instanceof Error ? cause.message : "Unable to save your profile.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function signOut() {
+    setSigningOut(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) throw new Error("Unable to log out. Please try again.");
+      router.replace("/");
+      router.refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to log out. Please try again.");
+      setSigningOut(false);
     }
   }
 
@@ -199,6 +216,18 @@ export default function OwnerProfile() {
                   </div>
                 )}
               </dl>
+              <div className="mt-8 border-t border-[#edf0ed] pt-5">
+                <p className="text-[11px] leading-5 text-[#718078]">Sign out of your Rent-Sync owner account on this device.</p>
+                <button
+                  type="button"
+                  onClick={() => void signOut()}
+                  disabled={signingOut}
+                  className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#f0d9d2] bg-[#fff8f7] px-4 text-[12px] font-semibold text-[#9a4a3d] transition hover:bg-[#fff0ed] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {signingOut ? <LoaderCircle size={15} className="animate-spin" /> : <LogOut size={15} />}
+                  {signingOut ? "Signing out..." : "Sign out"}
+                </button>
+              </div>
             </section>
           </div>
         ) : null}

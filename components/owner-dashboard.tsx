@@ -2,13 +2,11 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import { useRouter } from "next/navigation";
 import {
   Building2,
   FileDown,
   FileText,
   Home,
-  LogOut,
   Menu,
   Plus,
   UserRound,
@@ -133,7 +131,6 @@ function getLocalDateInputValue() {
 }
 
 export default function OwnerDashboard() {
-  const router = useRouter();
   const routeState = useSyncExternalStore(
     subscribeToDashboardRoute,
     getDashboardRouteState,
@@ -189,17 +186,6 @@ export default function OwnerDashboard() {
     const timer = window.setTimeout(() => void loadPortfolio(), 0);
     return () => window.clearTimeout(timer);
   }, [loadPortfolio]);
-
-  async function logout() {
-    try {
-      const response = await fetch("/api/auth/logout", { method: "POST" });
-      if (!response.ok) throw new Error("Unable to log out. Please try again.");
-      router.replace("/");
-      router.refresh();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to log out. Please try again.");
-    }
-  }
 
   function openForm(kind: FormKind) {
     setFormKind(kind);
@@ -626,7 +612,6 @@ export default function OwnerDashboard() {
         </nav>
         <div className="border-t border-white/10 p-4">
           <a href="/owner/profile" onClick={() => setMobileMenu(false)} className="mb-2 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-[11px] text-white/65 transition hover:bg-white/[0.07] hover:text-white"><UserRound size={15} /> Profile</a>
-          <button type="button" onClick={logout} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-[11px] text-white/65 transition hover:bg-white/[0.07] hover:text-white"><LogOut size={15} /> Logout</button>
         </div>
       </aside>
 
@@ -640,7 +625,6 @@ export default function OwnerDashboard() {
           </div>
           <div className="flex items-center gap-2">
             <a href="/owner/profile" className="flex h-9 items-center gap-2 rounded-lg border border-[#e4eae5] bg-white px-3 text-[11px] font-medium text-[#315b41] transition hover:bg-[#f1f6f2]"><UserRound size={15} /><span>Profile</span></a>
-            <button type="button" onClick={logout} className="flex h-9 items-center gap-2 rounded-lg border border-[#e4eae5] bg-white px-3 text-[11px] font-medium text-[#315b41] transition hover:bg-[#f1f6f2]"><LogOut size={15} /><span>Logout</span></button>
           </div>
         </header>
 

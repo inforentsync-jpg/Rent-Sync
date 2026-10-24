@@ -7,10 +7,13 @@ import {
   createDevCompany,
   createDevOwnerBuilding,
   createDevTenant,
+  deleteDevPortfolioItem,
   DevAgreementConflictError,
   generateDevAnnualAgreementDrafts,
   getDevOwnerPortfolio,
   updateDevAsset,
+  updateDevDraftAgreement,
+  updateDevPortfolioItem,
 } from "@/lib/dev-store";
 import { getOwnerSession } from "@/lib/session";
 import { addElevenMonthTerm, hasValidElevenMonthTerm } from "@/lib/rental-agreement";
@@ -479,6 +482,13 @@ export async function POST(request: Request) {
       const endsAt = new Date(`${endDate}T00:00:00.000Z`);
       const agreementYear = Number(startDate.slice(0, 4));
       const result = await prisma.$transaction(async (transaction) => {
+        const existingAssignment = await transaction.assetTenant.findFirst({
+          where: { assetId },
+          select: { id: true },
+        });
+        if (existingAssignment) {
+          throw new PortfolioConflictError("This unit is already assigned to a tenant.");
+        }
         const existingTenant = mobileNumber
           ? await transaction.tenant.findUnique({ where: { mobileNumber } })
           : null;
@@ -601,8 +611,191 @@ export async function PATCH(request: Request) {
   } catch {
     return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
   }
-  if (!isRecord(body) || text(body, "kind", 20) !== "asset") {
-    return NextResponse.json({ error: "Invalid asset update request." }, { status: 400 });
+  if (!isRecord(body)) {
+    return NextResponse.json({ error: "Invalid portfolio update request." }, { status: 400 });
+  }
+
+  const kind = text(body, "kind", 20);
+  if (kind === "agreement") {
+    const id = text(body, "id", 100);
+    const startDate = text(body, "startDate", 10);
+    const endDate = text(body, "endDate", 10);
+    const monthlyRent = positiveAmount(body, "monthlyRent", true);
+    const securityDeposit = positiveAmount(body, "securityDeposit", true);
+    const terms = typeof body.terms === "string" ? body.terms.trim() : null;
+    const importantTerms = typeof body.importantTerms === "string" ? body.importantTerms.trim() : "";
+    if (
+      !id ||
+      !startDate ||
+      !endDate ||
+      monthlyRent === null ||
+      securityDeposit === null ||
+      terms === null ||
+      terms.length > 2000 ||
+      importantTerms.length > 4000 ||
+      !hasValidElevenMonthTerm(startDate, endDate)
+    ) {
+      return NextResponse.json({ error: "Enter valid 11-month draft agreement details." }, { status: 400 });
+    }
+    if (!shouldUseDatabase()) {
+      try {
+        const agreement = await updateDevDraftAgreement(session.mobileNumber, id, {
+          startDate,
+          endDate,
+          monthlyRent,
+          securityDeposit,
+          terms,
+          importantTerms,
+        });
+        return NextResponse.json({ agreement });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to update draft agreement.";
+        console.error("Unable to update local owner draft agreement.", error);
+        return NextResponse.json(
+          { error: message },
+          { status: error instanceof DevAgreementConflictError ? 409 : 400 },
+        );
+      }
+    }
+    try {
+      const owner = await prisma.propertyOwner.findUnique({
+        where: { mobileNumber: session.mobileNumber },
+        select: { id: true },
+      });
+      if (!owner) return NextResponse.json({ error: "Owner account was not found." }, { status: 404 });
+      const agreement = await prisma.rentalAgreement.findFirst({
+        where: { id, asset: { building: { ownerId: owner.id } } },
+        select: { id: true, status: true, ownerApprovedAt: true, tenantApprovedAt: true },
+      });
+      if (!agreement) return NextResponse.json({ error: "Agreement not found in your account." }, { status: 404 });
+      if (
+        agreement.status !== "DRAFT" ||
+        agreement.ownerApprovedAt ||
+        agreement.tenantApprovedAt
+      ) {
+        return NextResponse.json({ error: "Only unapproved draft agreements can be edited." }, { status: 409 });
+      }
+      const updated = await prisma.rentalAgreement.update({
+        where: { id },
+        data: {
+          startDate: new Date(`${startDate}T00:00:00.000Z`),
+          endDate: new Date(`${endDate}T00:00:00.000Z`),
+          agreementYear: Number(startDate.slice(0, 4)),
+          monthlyRent,
+          securityDeposit,
+          terms,
+          importantTerms,
+        },
+      });
+      return NextResponse.json({ agreement: updated });
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
+        return NextResponse.json({ error: "An agreement already exists for this tenant, unit, and year." }, { status: 409 });
+      }
+      console.error("Unable to update database owner draft agreement.", error);
+      return NextResponse.json({ error: "Unable to update draft agreement. Check the database connection." }, { status: 503 });
+    }
+  }
+  if (kind === "company" || kind === "building" || kind === "tenant") {
+    const id = text(body, "id", 100);
+    if (!id) return NextResponse.json({ error: "Choose an item to update." }, { status: 400 });
+    const input: Record<string, string | null> = {};
+
+    if (kind === "company") {
+      const name = text(body, "name", 160);
+      if (!name) return NextResponse.json({ error: "Enter a company name." }, { status: 400 });
+      input.name = name;
+    } else if (kind === "building") {
+      const companyId = text(body, "companyId", 100);
+      const name = text(body, "name", 160);
+      const address = text(body, "address");
+      const city = text(body, "city", 100);
+      const state = text(body, "state", 100);
+      const postalCode = text(body, "postalCode", 12);
+      if (!companyId || !name || !address || !city || !state || !postalCode) {
+        return NextResponse.json({ error: "Complete all property fields." }, { status: 400 });
+      }
+      Object.assign(input, { companyId, name, address, city, state, postalCode });
+    } else {
+      const fullName = text(body, "fullName", 120);
+      const rawMobile = body.mobileNumber;
+      if (!fullName || (rawMobile !== null && rawMobile !== undefined && typeof rawMobile !== "string")) {
+        return NextResponse.json({ error: "Enter the tenant name and a valid mobile number." }, { status: 400 });
+      }
+      const mobileNumber = typeof rawMobile === "string" ? rawMobile.replace(/\D/g, "") : "";
+      if (mobileNumber && !/^\d{10,15}$/.test(mobileNumber)) {
+        return NextResponse.json({ error: "Enter a valid tenant mobile number." }, { status: 400 });
+      }
+      Object.assign(input, { fullName, mobileNumber: mobileNumber || null });
+    }
+
+    if (!shouldUseDatabase()) {
+      try {
+        const item = await updateDevPortfolioItem(session.mobileNumber, kind, id, input);
+        return NextResponse.json({ item });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to update portfolio item.";
+        console.error("Unable to update local owner portfolio item.", error);
+        return NextResponse.json({ error: message }, { status: 400 });
+      }
+    }
+
+    try {
+      const owner = await prisma.propertyOwner.findUnique({
+        where: { mobileNumber: session.mobileNumber },
+        select: { id: true, fullName: true },
+      });
+      if (!owner) return NextResponse.json({ error: "Owner account was not found." }, { status: 404 });
+
+      if (kind === "company") {
+        const company = await prisma.company.updateMany({
+          where: { id, ownerId: owner.id },
+          data: { name: input.name! },
+        });
+        if (!company.count) return NextResponse.json({ error: "Company not found in your account." }, { status: 404 });
+      } else if (kind === "building") {
+        const company = await prisma.company.findFirst({
+          where: { id: input.companyId!, ownerId: owner.id },
+          select: { id: true },
+        });
+        if (!company) return NextResponse.json({ error: "Company not found in your account." }, { status: 404 });
+        const building = await prisma.building.updateMany({
+          where: { id, ownerId: owner.id },
+          data: {
+            companyId: input.companyId,
+            name: input.name!,
+            address: input.address!,
+            city: input.city!,
+            state: input.state!,
+            postalCode: input.postalCode!,
+            ownerName: owner.fullName,
+            ownerMobile: session.mobileNumber,
+          },
+        });
+        if (!building.count) return NextResponse.json({ error: "Property not found in your account." }, { status: 404 });
+      } else {
+        const duplicate = input.mobileNumber
+          ? await prisma.tenant.findFirst({
+              where: { id: { not: id }, mobileNumber: input.mobileNumber },
+              select: { id: true },
+            })
+          : null;
+        if (duplicate) return NextResponse.json({ error: "This mobile number is already registered." }, { status: 409 });
+        const tenant = await prisma.tenant.updateMany({
+          where: { id, ownerId: owner.id },
+          data: { fullName: input.fullName!, mobileNumber: input.mobileNumber },
+        });
+        if (!tenant.count) return NextResponse.json({ error: "Tenant not found in your account." }, { status: 404 });
+      }
+      return NextResponse.json({ success: true });
+    } catch (error) {
+      console.error(`Unable to update database owner ${kind}.`, error);
+      return NextResponse.json({ error: `Unable to update ${kind}. Check the database connection.` }, { status: 503 });
+    }
+  }
+
+  if (kind !== "asset") {
+    return NextResponse.json({ error: "Unknown portfolio update type." }, { status: 400 });
   }
 
   const assetId = text(body, "id", 100);
@@ -686,5 +879,109 @@ export async function PATCH(request: Request) {
       { error: "Unable to update asset. Check the database connection and migrations." },
       { status: 503 },
     );
+  }
+}
+
+export async function DELETE(request: Request) {
+  const session = await getOwnerSession();
+  if (!session) {
+    return NextResponse.json({ error: "Owner sign-in is required." }, { status: 401 });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
+  }
+  if (!isRecord(body)) {
+    return NextResponse.json({ error: "Invalid portfolio delete request." }, { status: 400 });
+  }
+  const kind = text(body, "kind", 20);
+  const id = text(body, "id", 100);
+  if (
+    !id ||
+    (kind !== "company" && kind !== "building" && kind !== "asset" && kind !== "tenant" && kind !== "agreement")
+  ) {
+    return NextResponse.json({ error: "Choose a valid portfolio item to delete." }, { status: 400 });
+  }
+
+  if (!shouldUseDatabase()) {
+    try {
+      await deleteDevPortfolioItem(session.mobileNumber, kind, id);
+      return NextResponse.json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to delete portfolio item.";
+      console.error("Unable to delete local owner portfolio item.", error);
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+  }
+
+  try {
+    const owner = await prisma.propertyOwner.findUnique({
+      where: { mobileNumber: session.mobileNumber },
+      select: { id: true },
+    });
+    if (!owner) return NextResponse.json({ error: "Owner account was not found." }, { status: 404 });
+
+    if (kind === "company") {
+      const company = await prisma.company.findFirst({
+        where: { id, ownerId: owner.id },
+        select: { id: true, buildings: { select: { id: true } } },
+      });
+      if (!company) return NextResponse.json({ error: "Company not found in your account." }, { status: 404 });
+      if (company.buildings.length) {
+        return NextResponse.json({ error: "Move or delete this company's properties before deleting the company." }, { status: 409 });
+      }
+      await prisma.company.delete({ where: { id: company.id } });
+    } else if (kind === "building") {
+      const building = await prisma.building.findFirst({
+        where: { id, ownerId: owner.id },
+        select: { id: true, assets: { select: { id: true } } },
+      });
+      if (!building) return NextResponse.json({ error: "Property not found in your account." }, { status: 404 });
+      if (building.assets.length) {
+        return NextResponse.json({ error: "Delete this property's units before deleting the property." }, { status: 409 });
+      }
+      await prisma.building.delete({ where: { id: building.id } });
+    } else if (kind === "asset") {
+      const asset = await prisma.asset.findFirst({
+        where: { id, building: { ownerId: owner.id } },
+        select: { id: true, agreements: { select: { id: true } } },
+      });
+      if (!asset) return NextResponse.json({ error: "Unit not found in your account." }, { status: 404 });
+      if (asset.agreements.length) {
+        return NextResponse.json({ error: "This unit has agreement history and cannot be deleted." }, { status: 409 });
+      }
+      await prisma.asset.delete({ where: { id: asset.id } });
+    } else if (kind === "tenant") {
+      const tenant = await prisma.tenant.findFirst({
+        where: { id, ownerId: owner.id },
+        select: { id: true, agreements: { select: { id: true } } },
+      });
+      if (!tenant) return NextResponse.json({ error: "Tenant not found in your account." }, { status: 404 });
+      if (tenant.agreements.length) {
+        return NextResponse.json({ error: "This tenant has agreement history and cannot be deleted." }, { status: 409 });
+      }
+      await prisma.tenant.delete({ where: { id: tenant.id } });
+    } else {
+      const agreement = await prisma.rentalAgreement.findFirst({
+        where: { id, asset: { building: { ownerId: owner.id } } },
+        select: { id: true, status: true, ownerApprovedAt: true, tenantApprovedAt: true },
+      });
+      if (!agreement) return NextResponse.json({ error: "Agreement not found in your account." }, { status: 404 });
+      if (
+        agreement.status !== "DRAFT" ||
+        agreement.ownerApprovedAt ||
+        agreement.tenantApprovedAt
+      ) {
+        return NextResponse.json({ error: "Only unapproved draft agreements can be deleted." }, { status: 409 });
+      }
+      await prisma.rentalAgreement.delete({ where: { id: agreement.id } });
+    }
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error(`Unable to delete database owner ${kind}.`, error);
+    return NextResponse.json({ error: `Unable to delete ${kind}. Check the database connection.` }, { status: 503 });
   }
 }

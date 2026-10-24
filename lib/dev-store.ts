@@ -505,6 +505,166 @@ export function updateDevAsset(
   });
 }
 
+export function updateDevPortfolioItem(
+  ownerMobile: string,
+  kind: "company" | "building" | "tenant",
+  id: string,
+  input: Record<string, string | null>,
+) {
+  return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === ownerMobile);
+    if (!owner) throw new Error("Owner account was not found.");
+    const now = new Date().toISOString();
+
+    if (kind === "company") {
+      const company = store.companies.find((entry) => entry.id === id && entry.ownerId === owner.id);
+      if (!company) throw new Error("Company not found in your account.");
+      company.name = input.name ?? company.name;
+      company.updatedAt = now;
+      await writeStore(store);
+      return company;
+    }
+    if (kind === "building") {
+      const building = store.buildings.find((entry) => entry.id === id && entry.ownerId === owner.id);
+      if (!building) throw new Error("Property not found in your account.");
+      const company = store.companies.find(
+        (entry) => entry.id === input.companyId && entry.ownerId === owner.id,
+      );
+      if (!company) throw new Error("Company not found in your account.");
+      Object.assign(building, {
+        companyId: company.id,
+        name: input.name ?? building.name,
+        address: input.address ?? building.address,
+        city: input.city ?? building.city,
+        state: input.state ?? building.state,
+        postalCode: input.postalCode ?? building.postalCode,
+        updatedAt: now,
+      });
+      await writeStore(store);
+      return building;
+    }
+
+    const tenant = store.tenants.find((entry) => entry.id === id && entry.ownerId === owner.id);
+    if (!tenant) throw new Error("Tenant not found in your account.");
+    const mobileNumber = input.mobileNumber?.replace(/\D/g, "") || null;
+    if (
+      mobileNumber &&
+      store.tenants.some((entry) => entry.id !== id && entry.mobileNumber === mobileNumber)
+    ) {
+      throw new Error("This mobile number is already registered.");
+    }
+    tenant.fullName = input.fullName ?? tenant.fullName;
+    tenant.mobileNumber = mobileNumber;
+    tenant.updatedAt = now;
+    await writeStore(store);
+    return tenant;
+  });
+}
+
+export function deleteDevPortfolioItem(
+  ownerMobile: string,
+  kind: "company" | "building" | "asset" | "tenant" | "agreement",
+  id: string,
+) {
+  return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === ownerMobile);
+    if (!owner) throw new Error("Owner account was not found.");
+
+    if (kind === "company") {
+      const company = store.companies.find((entry) => entry.id === id && entry.ownerId === owner.id);
+      if (!company) throw new Error("Company not found in your account.");
+      if (store.buildings.some((entry) => entry.companyId === id)) {
+        throw new Error("Move or delete this company's properties before deleting the company.");
+      }
+      store.companies = store.companies.filter((entry) => entry.id !== id);
+    } else if (kind === "building") {
+      const building = store.buildings.find((entry) => entry.id === id && entry.ownerId === owner.id);
+      if (!building) throw new Error("Property not found in your account.");
+      if (store.assets.some((entry) => entry.buildingId === id)) {
+        throw new Error("Delete this property's units before deleting the property.");
+      }
+      store.buildings = store.buildings.filter((entry) => entry.id !== id);
+    } else if (kind === "asset") {
+      const asset = store.assets.find((entry) => entry.id === id);
+      const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
+      if (!asset || building?.ownerId !== owner.id) throw new Error("Unit not found in your account.");
+      if (store.agreements.some((entry) => entry.assetId === id)) {
+        throw new Error("This unit has agreement history and cannot be deleted.");
+      }
+      store.assets = store.assets.filter((entry) => entry.id !== id);
+      for (const tenant of store.tenants) tenant.assetIds = tenant.assetIds.filter((assetId) => assetId !== id);
+    } else if (kind === "tenant") {
+      const tenant = store.tenants.find((entry) => entry.id === id && entry.ownerId === owner.id);
+      if (!tenant) throw new Error("Tenant not found in your account.");
+      if (store.agreements.some((entry) => entry.tenantId === id)) {
+        throw new Error("This tenant has agreement history and cannot be deleted.");
+      }
+      store.tenants = store.tenants.filter((entry) => entry.id !== id);
+    } else {
+      const agreement = store.agreements.find((entry) => entry.id === id);
+      const asset = store.assets.find((entry) => entry.id === agreement?.assetId);
+      const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
+      if (!agreement || building?.ownerId !== owner.id) throw new Error("Agreement not found in your account.");
+      if (
+        agreement.status !== "DRAFT" ||
+        agreement.ownerApprovedAt ||
+        agreement.tenantApprovedAt
+      ) {
+        throw new Error("Only unapproved draft agreements can be deleted.");
+      }
+      store.agreements = store.agreements.filter((entry) => entry.id !== id);
+    }
+
+    await writeStore(store);
+    return { success: true };
+  });
+}
+
+export function updateDevDraftAgreement(
+  ownerMobile: string,
+  agreementId: string,
+  input: {
+    startDate: string;
+    endDate: string;
+    monthlyRent: number;
+    securityDeposit: number;
+    terms: string;
+    importantTerms: string;
+  },
+) {
+  return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === ownerMobile);
+    const agreement = store.agreements.find((entry) => entry.id === agreementId);
+    const asset = store.assets.find((entry) => entry.id === agreement?.assetId);
+    const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
+    if (!owner || !agreement || building?.ownerId !== owner.id) {
+      throw new Error("Agreement not found in your account.");
+    }
+    if (
+      agreement.status !== "DRAFT" ||
+      agreement.ownerApprovedAt ||
+      agreement.tenantApprovedAt
+    ) {
+      throw new Error("Only unapproved draft agreements can be edited.");
+    }
+    const agreementYear = Number(input.startDate.slice(0, 4));
+    if (
+      store.agreements.some(
+        (entry) =>
+          entry.id !== agreementId &&
+          entry.assetId === agreement.assetId &&
+          entry.tenantId === agreement.tenantId &&
+          entry.agreementYear === agreementYear,
+      )
+    ) {
+      throw new DevAgreementConflictError("An agreement already exists for this tenant, unit, and year.");
+    }
+    Object.assign(agreement, input, { agreementYear });
+    await writeStore(store);
+    return agreement;
+  });
+}
+
 export function createDevTenant(
   ownerMobile: string,
   assetId: string,
@@ -518,6 +678,9 @@ export function createDevTenant(
     const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
     if (!owner || !asset || !building || building.ownerId !== owner.id) {
       throw new Error("Asset not found in your account.");
+    }
+    if (store.tenants.some((entry) => entry.assetIds.includes(assetId))) {
+      throw new DevAgreementConflictError("This unit is already assigned to a tenant.");
     }
     const endDate = addElevenMonthTerm(startDate);
     if (!endDate) throw new Error("Choose a valid agreement start date.");

@@ -4,7 +4,7 @@ import type { MobileSession } from "./session";
 import { readApiBaseUrl } from "./session";
 
 type RequestOptions = {
-  method?: "GET" | "POST" | "PATCH";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: unknown;
   token?: string;
 };
@@ -110,6 +110,27 @@ export function createPortfolioItem<T>(
   return authenticatedRequest<T>(session, "/api/owner/portfolio", {
     method: "POST",
     body,
+  });
+}
+
+export function updatePortfolioItem<T>(
+  session: MobileSession,
+  body: Record<string, unknown>,
+) {
+  return authenticatedRequest<T>(session, "/api/owner/portfolio", {
+    method: "PATCH",
+    body,
+  });
+}
+
+export function deletePortfolioItem<T>(
+  session: MobileSession,
+  kind: string,
+  id: string,
+) {
+  return authenticatedRequest<T>(session, "/api/owner/portfolio", {
+    method: "DELETE",
+    body: { kind, id },
   });
 }
 

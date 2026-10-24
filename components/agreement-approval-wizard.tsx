@@ -115,14 +115,14 @@ export default function AgreementApprovalWizard({
     "mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[12px] text-[#33473a] outline-none focus:border-[#8cbd9b]";
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-[#10281c]/50 p-3 backdrop-blur-[2px] sm:p-5">
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[#10281c]/50 p-2 backdrop-blur-[2px] sm:p-5">
       <section
         role="dialog"
         aria-modal="true"
         aria-labelledby="agreement-review-title"
-        className="my-auto w-full max-w-[760px] overflow-hidden rounded-2xl bg-white shadow-2xl"
+        className="my-auto flex max-h-[calc(100vh-1rem)] w-full max-w-[760px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100vh-2.5rem)]"
       >
-        <div className="flex items-start justify-between border-b border-[#edf0ed] px-5 py-4 sm:px-7">
+        <div className="flex shrink-0 items-start justify-between border-b border-[#edf0ed] px-4 py-3 sm:px-7 sm:py-4">
           <div>
             <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#6b8a76]">
               {party === "OWNER" ? "Owner approval" : "Tenant approval"}
@@ -142,7 +142,7 @@ export default function AgreementApprovalWizard({
           </button>
         </div>
 
-        <div role="tablist" aria-label="Agreement approval steps" className="flex overflow-x-auto border-b border-[#edf0ed] px-3 sm:px-5">
+        <div role="tablist" aria-label="Agreement approval steps" className="flex shrink-0 overflow-x-auto border-b border-[#edf0ed] px-2 sm:px-5">
           {steps.map((item, index) => (
             <button
               key={item.id}
@@ -153,14 +153,14 @@ export default function AgreementApprovalWizard({
               onClick={() => {
                 setStepIndex(index);
               }}
-              className={`shrink-0 border-b-2 px-3 py-3 text-[10px] font-semibold disabled:cursor-not-allowed disabled:opacity-50 sm:px-4 ${stepIndex === index ? "border-[#176b4b] text-[#176b4b]" : "border-transparent text-[#849188] hover:text-[#355942]"}`}
+              className={`shrink-0 border-b-2 px-2.5 py-3 text-[10px] font-semibold disabled:cursor-not-allowed disabled:opacity-50 sm:px-4 ${stepIndex === index ? "border-[#176b4b] text-[#176b4b]" : "border-transparent text-[#849188] hover:text-[#355942]"}`}
             >
               {item.label}
             </button>
           ))}
         </div>
 
-        <div className="max-h-[58vh] min-h-[260px] space-y-4 overflow-y-auto p-5 sm:p-7">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-7">
           {step.id === "kyc" ? (
             <>
               <ReviewHeading title="Tenant and property details" text="Check who and what this agreement covers." />
@@ -249,20 +249,20 @@ export default function AgreementApprovalWizard({
           {error ? <p role="alert" className="rounded-lg bg-[#fff4ed] px-3 py-2 text-[11px] text-[#995634]">{error}</p> : null}
         </div>
 
-        <div className="flex items-center justify-between gap-3 border-t border-[#edf0ed] px-5 py-4 sm:px-7">
-          <button type="button" onClick={onClose} className="h-10 rounded-lg border border-[#e3e9e4] px-4 text-[11px] font-semibold text-[#58695e]">Cancel</button>
-          <div className="flex gap-2">
+        <div className="flex shrink-0 flex-col gap-2 border-t border-[#edf0ed] px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-7 sm:py-4">
+          <button type="button" onClick={onClose} className="h-10 w-full rounded-lg border border-[#e3e9e4] px-4 text-[11px] font-semibold text-[#58695e] sm:w-auto">Cancel</button>
+          <div className="grid grid-cols-2 gap-2 sm:flex">
             {stepIndex > 0 ? (
-              <button type="button" onClick={goPrevious} className="flex h-10 items-center gap-1 rounded-lg border border-[#e3e9e4] px-3 text-[11px] font-semibold text-[#58695e]">
+              <button type="button" onClick={goPrevious} className="flex h-10 min-w-0 items-center justify-center gap-1 rounded-lg border border-[#e3e9e4] px-2 text-[11px] font-semibold text-[#58695e] sm:px-3">
                 <ChevronLeft size={14} /> Back
               </button>
             ) : null}
             {stepIndex < steps.length - 1 ? (
-              <button type="button" onClick={goNext} className="flex h-10 items-center gap-1 rounded-lg bg-[#176b4b] px-4 text-[11px] font-semibold text-white hover:bg-[#10583c]">
+              <button type="button" onClick={goNext} className={`flex h-10 min-w-0 items-center justify-center gap-1 rounded-lg bg-[#176b4b] px-2 text-[11px] font-semibold text-white hover:bg-[#10583c] sm:px-4 ${stepIndex === 0 ? "col-span-2 sm:col-span-1" : ""}`}>
                 Next <ChevronRight size={14} />
               </button>
             ) : (
-              <button type="button" onClick={() => void approve()} disabled={saving} className="flex h-10 items-center gap-2 rounded-lg bg-[#176b4b] px-4 text-[11px] font-semibold text-white hover:bg-[#10583c] disabled:opacity-60">
+              <button type="button" onClick={() => void approve()} disabled={saving} className="col-span-2 flex h-10 min-w-0 items-center justify-center gap-2 rounded-lg bg-[#176b4b] px-2 text-[11px] font-semibold text-white hover:bg-[#10583c] disabled:opacity-60 sm:col-span-1 sm:px-4">
                 {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Check size={14} />}
                 {saving ? "Saving approval..." : "Approve agreement"}
               </button>
