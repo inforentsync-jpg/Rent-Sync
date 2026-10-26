@@ -2,8 +2,14 @@ import { randomUUID } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { addElevenMonthTerm } from "@/lib/rental-agreement";
+import {
+  addAgreementDuration,
+  DEFAULT_AGREEMENT_DURATION_UNIT,
+  DEFAULT_AGREEMENT_DURATION_VALUE,
+  hasValidAgreementDurationTerm,
+  type AgreementDurationUnit,
+} from "@/lib/agreement-duration";
 import { getRenewalAgreementTerm } from "@/lib/agreement-year";
-import { getNextAgreementApprovals } from "@/lib/agreement-approval";
 import { shouldUseDatabase } from "@/lib/storage-mode";
 
 export type DevBuilding = {
@@ -47,6 +53,9 @@ export type DevAsset = {
   unitNumber: string;
   monthlyRent: number;
   securityDeposit: number;
+  agreementDurationUnit: AgreementDurationUnit;
+  agreementDurationValue: number;
+  agreementStartDate?: string | null;
   externalBuildingId?: string | null;
   ward?: string | null;
   roomNumber?: string | null;
@@ -159,7 +168,14 @@ async function readStore(): Promise<DevStore> {
         companyId: building.companyId ?? null,
       })),
       companies: existing.companies ?? [],
-      assets: existing.assets ?? [],
+      assets: (existing.assets ?? []).map((asset) => ({
+        ...asset,
+        agreementDurationUnit:
+          asset.agreementDurationUnit === "YEAR" ? "YEAR" : DEFAULT_AGREEMENT_DURATION_UNIT,
+        agreementDurationValue:
+          asset.agreementDurationValue ?? DEFAULT_AGREEMENT_DURATION_VALUE,
+        agreementStartDate: asset.agreementStartDate ?? null,
+      })),
       tenants: existing.tenants ?? [],
       archivedAgreements: existing.archivedAgreements ?? [],
       dismissedAgreementRenewals: existing.dismissedAgreementRenewals ?? [],
@@ -819,7 +835,7 @@ export function updateDevDraftAgreement(
     const agreement = store.agreements.find((entry) => entry.id === agreementId);
     const asset = store.assets.find((entry) => entry.id === agreement?.assetId);
     const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
-    if (!owner || !agreement || building?.ownerId !== owner.id) {
+    if (!owner || !agreement || !asset || building?.ownerId !== owner.id) {
       throw new Error("Agreement not found in your account.");
     }
     if (
@@ -828,6 +844,16 @@ export function updateDevDraftAgreement(
       agreement.tenantApprovedAt
     ) {
       throw new Error("Only unapproved draft agreements can be edited.");
+    }
+    if (
+      !hasValidAgreementDurationTerm(
+        input.startDate,
+        input.endDate,
+        asset.agreementDurationUnit,
+        asset.agreementDurationValue,
+      )
+    ) {
+      throw new Error("The end date must match the duration configured for this asset.");
     }
     const agreementYear = Number(input.startDate.slice(0, 4));
     if (
@@ -872,7 +898,13 @@ export function createDevTenant(
     if (assetId && store.tenants.some((entry) => entry.assetIds.includes(assetId))) {
       throw new DevAgreementConflictError("This unit is already assigned to a tenant.");
     }
-    const endDate = startDate ? addElevenMonthTerm(startDate) : null;
+    const endDate = startDate
+      ? addAgreementDuration(
+          startDate,
+          asset?.agreementDurationUnit ?? DEFAULT_AGREEMENT_DURATION_UNIT,
+          asset?.agreementDurationValue ?? DEFAULT_AGREEMENT_DURATION_VALUE,
+        )
+      : null;
     if (startDate && !endDate) throw new Error("Choose a valid agreement start date.");
     let tenant = mobileNumber
       ? store.tenants.find((entry) => entry.mobileNumber === mobileNumber)
@@ -944,7 +976,13 @@ export function createDevTenant(
       createdAt: now,
     };
     store.agreements.unshift(initialAgreement);
-    const renewalTerm = getRenewalAgreementTerm(startDate, endDate);
+    const renewalTerm = getRenewalAgreementTerm(
+      startDate,
+      endDate,
+      new Date(),
+      asset.agreementDurationUnit,
+      asset.agreementDurationValue,
+    );
     if (
       renewalTerm &&
       !store.agreements.some(
@@ -1008,8 +1046,12 @@ export function createDevAgreement(input: {
     }
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(input.startDate) ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(input.endDate) ||
-      input.endDate <= input.startDate
+      !hasValidAgreementDurationTerm(
+        input.startDate,
+        input.endDate,
+        asset.agreementDurationUnit,
+        asset.agreementDurationValue,
+      )
     ) {
       throw new Error("Choose a valid agreement start and end date.");
     }
@@ -1061,41 +1103,29 @@ export type AgreementReviewInput = {
   endDate: string;
   monthlyRent: number;
   securityDeposit: number;
-  terms: string;
-  importantTerms: string;
 };
 
 export async function reviewDevAgreement(
-  mobileNumber: string,
-  role: "OWNER" | "TENANT",
+  ownerMobile: string,
   agreementId: string,
   input: AgreementReviewInput,
 ) {
   return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === ownerMobile);
     const agreement = store.agreements.find((entry) => entry.id === agreementId);
     if (!agreement || agreement.status !== "DRAFT") return null;
-    const tenant = store.tenants.find((entry) => entry.id === agreement.tenantId);
     const asset = store.assets.find((entry) => entry.id === agreement.assetId);
     const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
     const company = store.companies.find((entry) => entry.id === building?.companyId);
-    if (!tenant || !asset || !building) return null;
-
-    const isAuthorized =
-      role === "OWNER"
-        ? (company?.ownerId ?? building.ownerId) ===
-          store.owners.find((entry) => entry.mobileNumber === mobileNumber)?.id
-        : tenant.mobileNumber === mobileNumber;
-    if (!isAuthorized) return null;
-    if (
-      role === "OWNER"
-        ? agreement.ownerApprovedAt != null
-        : agreement.ownerApprovedAt == null || agreement.tenantApprovedAt != null
-    ) {
-      return null;
-    }
+    if (!owner || !asset || !building || (company?.ownerId ?? building.ownerId) !== owner.id) return null;
 
     if (
-      addElevenMonthTerm(input.startDate) !== input.endDate ||
+      !hasValidAgreementDurationTerm(
+        input.startDate,
+        input.endDate,
+        asset.agreementDurationUnit,
+        asset.agreementDurationValue,
+      ) ||
       !Number.isInteger(input.monthlyRent) ||
       input.monthlyRent <= 0 ||
       !Number.isInteger(input.securityDeposit) ||
@@ -1126,22 +1156,6 @@ export async function reviewDevAgreement(
     ) {
       throw new DevAgreementConflictError("This asset already has an active agreement for those dates.");
     }
-    const hasChanges =
-      agreement.startDate !== input.startDate ||
-      agreement.endDate !== input.endDate ||
-      agreement.monthlyRent !== input.monthlyRent ||
-      agreement.securityDeposit !== input.securityDeposit ||
-      agreement.terms !== input.terms ||
-      (agreement.importantTerms ?? "") !== input.importantTerms;
-    const approvalState = getNextAgreementApprovals(
-      {
-        ownerApprovedAt: agreement.ownerApprovedAt ?? null,
-        tenantApprovedAt: agreement.tenantApprovedAt ?? null,
-      },
-      role,
-      hasChanges,
-      new Date(),
-    );
     const updatedAgreement: DevAgreement = {
       ...agreement,
       startDate: input.startDate,
@@ -1149,19 +1163,12 @@ export async function reviewDevAgreement(
       agreementYear,
       monthlyRent: input.monthlyRent,
       securityDeposit: input.securityDeposit,
-      terms: input.terms,
-      importantTerms: input.importantTerms,
-      status: "DRAFT",
-      ownerApprovedAt: approvalState.ownerApprovedAt
-        ? new Date(approvalState.ownerApprovedAt).toISOString()
-        : null,
-      tenantApprovedAt: approvalState.tenantApprovedAt
-        ? new Date(approvalState.tenantApprovedAt).toISOString()
-        : null,
+      terms: agreement.terms,
+      importantTerms: agreement.importantTerms ?? "",
+      status: "ACTIVE",
+      ownerApprovedAt: new Date().toISOString(),
+      tenantApprovedAt: agreement.tenantApprovedAt ?? null,
     };
-    if (updatedAgreement.ownerApprovedAt && updatedAgreement.tenantApprovedAt) {
-      updatedAgreement.status = "ACTIVE";
-    }
     Object.assign(agreement, updatedAgreement);
     await writeStore(store);
     return agreement;
@@ -1213,6 +1220,8 @@ export function generateDevAnnualAgreementDrafts(mobileNumber: string, now = new
           latestAgreement.startDate,
           latestAgreement.endDate,
           now,
+          asset.agreementDurationUnit,
+          asset.agreementDurationValue,
         );
         if (!term) continue;
         if (

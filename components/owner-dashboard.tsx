@@ -18,7 +18,8 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { addElevenMonthTerm, getAgreementStatus, type AgreementStatus } from "@/lib/rental-agreement";
+import { getAgreementStatus, type AgreementStatus } from "@/lib/rental-agreement";
+import { addAgreementDuration } from "@/lib/agreement-duration";
 import AgreementFacts from "@/components/agreement-facts";
 import AgreementApprovalWizard, {
   type ReviewableAgreement,
@@ -59,6 +60,9 @@ type Asset = {
   roomNumber?: string | null;
   ksmartBuildingId?: string | null;
   ksrbId?: string | null;
+  agreementDurationUnit: "MONTH" | "YEAR";
+  agreementDurationValue: number;
+  agreementStartDate?: string | null;
 };
 type Tenant = {
   id: string;
@@ -293,7 +297,7 @@ export default function OwnerDashboard() {
       }
       setTenantShareLink({
         tenantId,
-        url: `${publicOrigin.origin}/tenent/${encodeURIComponent(payload.token)}`,
+        url: `${publicOrigin.origin}/share/tenant/${encodeURIComponent(payload.token)}`,
       });
       await loadPortfolio();
     } catch (cause) {
@@ -347,12 +351,19 @@ export default function OwnerDashboard() {
           tenantId: portfolio.assets.length === 1
             ? portfolio.tenants.find((tenant) => tenant.assetIds.includes(portfolio.assets[0].id))?.id ?? ""
             : "",
-          startDate: `${new Date().getFullYear() + 1}-01-01`,
+          startDate: portfolio.assets.length === 1
+            ? portfolio.assets[0].agreementStartDate?.slice(0, 10) ?? `${new Date().getFullYear() + 1}-01-01`
+            : `${new Date().getFullYear() + 1}-01-01`,
         }
       : kind === "building" && portfolio.companies.length === 1
       ? { companyId: portfolio.companies[0].id }
-      : kind === "asset" && portfolio.buildings.length === 1
-        ? { buildingId: portfolio.buildings[0].id }
+      : kind === "asset"
+        ? {
+            buildingId: portfolio.buildings.length === 1 ? portfolio.buildings[0].id : "",
+            agreementDurationUnit: "MONTH",
+            agreementDurationValue: "11",
+            agreementStartDate: getLocalDateInputValue(),
+          }
         : kind === "tenant" && portfolio.assets.length === 1
         ? {
             assetId: portfolio.assets[0].id,
@@ -373,9 +384,14 @@ export default function OwnerDashboard() {
     if (formKind === "asset") {
       body.monthlyRent = Number(form.monthlyRent);
       body.securityDeposit = Number(form.securityDeposit || "0");
+      body.agreementDurationValue = Number(form.agreementDurationValue || "11");
+      body.agreementStartDate = form.agreementStartDate || getLocalDateInputValue();
     }
     if (formKind === "agreement") {
-      body.endDate = form.startDate ? addElevenMonthTerm(form.startDate) : null;
+      const asset = portfolio.assets.find((entry) => entry.id === form.assetId);
+      body.endDate = form.startDate && asset
+        ? addAgreementDuration(form.startDate, asset.agreementDurationUnit, asset.agreementDurationValue)
+        : null;
     }
     try {
       const response = await fetch("/api/owner/portfolio", {
@@ -507,9 +523,9 @@ export default function OwnerDashboard() {
       rows: portfolio.agreements.map((agreement) => {
         const tenant = portfolio.tenants.find((entry) => entry.id === agreement.tenantId);
         const asset = portfolio.assets.find((entry) => entry.id === agreement.assetId);
-        const status = agreement.status === "DRAFT"
-          ? agreement.ownerApprovedAt ? "Awaiting tenant approval" : "Awaiting owner approval"
-          : agreement.ownerApprovedAt && agreement.tenantApprovedAt
+        const status: AgreementStatus | null = agreement.status === "DRAFT"
+          ? agreement.ownerApprovedAt ? "Owner approved" : "Awaiting owner approval"
+          : agreement.ownerApprovedAt
             ? "Approved"
             : getAgreementStatus(agreement.endDate);
         return {
@@ -558,7 +574,7 @@ export default function OwnerDashboard() {
     },
   }[selectedModule];
   const pendingOwnerApprovals = portfolio.agreements.filter(
-    (agreement) => agreement.status === "DRAFT" && !agreement.ownerApprovedAt,
+    (agreement) => agreement.status === "DRAFT",
   );
   const agreementYears = [...new Set(
     portfolio.agreements.map((agreement) => getAgreementYear(agreement.startDate)),
@@ -678,6 +694,9 @@ export default function OwnerDashboard() {
           roomNumber: asset.roomNumber ?? "",
           ksmartBuildingId: asset.ksmartBuildingId ?? "",
           ksrbId: asset.ksrbId ?? "",
+          agreementDurationUnit: asset.agreementDurationUnit,
+          agreementDurationValue: String(asset.agreementDurationValue),
+          agreementStartDate: asset.agreementStartDate?.slice(0, 10) ?? "",
         });
         setAssetEditError("");
       }
@@ -747,6 +766,7 @@ export default function OwnerDashboard() {
           id: selectedRecordId,
           monthlyRent: Number(assetEditForm.monthlyRent),
           securityDeposit: Number(assetEditForm.securityDeposit || "0"),
+          agreementDurationValue: Number(assetEditForm.agreementDurationValue),
         }),
       });
       const payload = await response.json();
@@ -938,6 +958,7 @@ export default function OwnerDashboard() {
   const selectedTenantAssets = selectedTenant
     ? portfolio.assets.filter((asset) => selectedTenant.assetIds.includes(asset.id))
     : [];
+  const formAgreementAsset = portfolio.assets.find((asset) => asset.id === form.assetId);
 
   function handleOpenAgreement(agreementId: string) {
     syncModuleUrl("agreements", agreementId);
@@ -1073,7 +1094,6 @@ export default function OwnerDashboard() {
                 <DetailField label="Monthly rent" value={`₹${selectedArchivedAgreement.monthlyRent.toLocaleString("en-IN")}`} />
                 <DetailField label="Security deposit" value={`₹${selectedArchivedAgreement.securityDeposit.toLocaleString("en-IN")}`} />
                 <DetailField label="Owner approved" value={selectedArchivedAgreement.ownerApprovedAt ? shortDate(selectedArchivedAgreement.ownerApprovedAt) : "Not approved"} />
-                <DetailField label="Tenant approved" value={selectedArchivedAgreement.tenantApprovedAt ? shortDate(selectedArchivedAgreement.tenantApprovedAt) : "Not approved"} />
                 <DetailField label="Additional terms" value={selectedArchivedAgreement.terms || "—"} />
                 <DetailField label="Additional important terms" value={selectedArchivedAgreement.importantTerms || "—"} />
               </div>
@@ -1108,7 +1128,7 @@ export default function OwnerDashboard() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {selectedAgreement.status === "DRAFT" && !selectedAgreement.ownerApprovedAt ? (
+                  {selectedAgreement.status === "DRAFT" ? (
                     <button type="button" onClick={() => openAgreementReview(selectedAgreement.id)} className="rounded-lg border border-[#dfe8e1] bg-[#f7faf7] px-3 py-2 text-[10px] font-semibold text-[#355942]">Review & approve</button>
                   ) : null}
                   <button type="button" onClick={() => void handleDeleteRecord(selectedAgreement.id)} disabled={deletingRecordId !== null} className="rounded-lg border border-[#f0d9d2] bg-[#fff8f7] px-3 py-2 text-[10px] font-semibold text-[#9a4a3d] disabled:cursor-not-allowed disabled:opacity-60">Archive</button>
@@ -1229,7 +1249,6 @@ export default function OwnerDashboard() {
               </div>
               <div className="grid gap-3 border-t border-[#edf0ed] bg-[#fbfcfb] p-5 sm:grid-cols-2 sm:p-6">
                 <AgreementApprovalStatus label="Owner approved" value={selectedAgreement.ownerApprovedAt} status={selectedAgreement.status} />
-                <AgreementApprovalStatus label="Tenant approved" value={selectedAgreement.tenantApprovedAt} status={selectedAgreement.status} />
               </div>
             </article>
           ) : selectedTenant && !recordEditMode ? (
@@ -1510,6 +1529,9 @@ export default function OwnerDashboard() {
                       <TextField label="Room number (optional)" name="roomNumber" value={assetEditForm.roomNumber ?? ""} placeholder="Room number" required={false} setForm={setAssetEditForm} />
                       <TextField label="K-SMART building ID (optional)" name="ksmartBuildingId" value={assetEditForm.ksmartBuildingId ?? ""} placeholder="K-SMART ID" required={false} setForm={setAssetEditForm} />
                       <TextField label="KSRB ID (optional)" name="ksrbId" value={assetEditForm.ksrbId ?? ""} placeholder="KSRB ID" required={false} setForm={setAssetEditForm} />
+                      <SelectField label="Agreement duration unit" name="agreementDurationUnit" value={assetEditForm.agreementDurationUnit ?? "MONTH"} options={[["MONTH", "Months"], ["YEAR", "Years"]]} setForm={setAssetEditForm} />
+                      <TextField label={`Agreement duration (${assetEditForm.agreementDurationUnit === "YEAR" ? "years" : "months"})`} name="agreementDurationValue" value={assetEditForm.agreementDurationValue ?? "11"} type="number" placeholder="11" setForm={setAssetEditForm} />
+                      <TextField label="Agreement start date" name="agreementStartDate" value={assetEditForm.agreementStartDate ?? ""} type="date" placeholder="" setForm={setAssetEditForm} />
                     </div>
                   </>
                 ) : null}
@@ -1770,6 +1792,11 @@ export default function OwnerDashboard() {
                 <div className="mt-3 grid grid-cols-2 gap-3"><TextField label="Asset name" name="name" value={form.name ?? ""} placeholder="Apartment 3B" setForm={setForm} /><TextField label="Unit number" name="unitNumber" value={form.unitNumber ?? ""} placeholder="3B" setForm={setForm} /></div>
                 <TextField label="Asset type" name="assetType" value={form.assetType ?? ""} placeholder="Apartment, room, shop..." setForm={setForm} />
                 <div className="mt-3 grid grid-cols-2 gap-3"><TextField label="Room number (optional)" name="roomNumber" value={form.roomNumber ?? ""} placeholder="Room number" required={false} setForm={setForm} /><TextField label="Ward number (optional)" name="ward" value={form.ward ?? ""} placeholder="Ward number" required={false} setForm={setForm} /><TextField label="K-SMART building ID (optional)" name="ksmartBuildingId" value={form.ksmartBuildingId ?? ""} placeholder="K-SMART ID" required={false} setForm={setForm} /><TextField label="KSRB ID (optional)" name="ksrbId" value={form.ksrbId ?? ""} placeholder="KSRB ID" required={false} setForm={setForm} /><TextField label="Monthly rent (₹)" name="monthlyRent" value={form.monthlyRent ?? ""} placeholder="15000" type="number" setForm={setForm} /><TextField label="Security deposit (₹)" name="securityDeposit" value={form.securityDeposit ?? ""} placeholder="30000" type="number" setForm={setForm} /></div>
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <SelectField label="Agreement duration unit" name="agreementDurationUnit" value={form.agreementDurationUnit ?? "MONTH"} options={[["MONTH", "Months"], ["YEAR", "Years"]]} setForm={setForm} />
+                  <TextField label={`Duration (${form.agreementDurationUnit === "YEAR" ? "years" : "months"})`} name="agreementDurationValue" value={form.agreementDurationValue ?? "11"} type="number" placeholder="11" setForm={setForm} />
+                  <TextField label="Agreement start date" name="agreementStartDate" value={form.agreementStartDate ?? getLocalDateInputValue()} type="date" placeholder="" setForm={setForm} />
+                </div>
               </>}
               {formKind === "tenant" && <>
                 <SelectField label="Asset (optional)" name="assetId" value={form.assetId ?? ""} options={portfolio.assets.map((entry) => [`${entry.id}`, `${entry.name} · ${entry.unitNumber}`])} required={false} setForm={setForm} />
@@ -1800,13 +1827,21 @@ export default function OwnerDashboard() {
                 </label>
                 <TextField label="Agreement start date (optional)" name="startDate" value={form.startDate ?? ""} placeholder="" type="date" required={false} setForm={setForm} />
                 <p className="mt-3 text-[10px] text-[#849188]">Tenants without a mobile number can be recorded, but cannot sign in until one is added.</p>
-                <p className="mt-2 text-[10px] text-[#849188]">Tenant name is the only required field. Select both an asset and agreement start date to also create an unsigned 11-month draft.</p>
+                <p className="mt-2 text-[10px] text-[#849188]">Tenant name is the only required field. Select both an asset and agreement start date to also create an unsigned draft using that asset&apos;s configured duration.</p>
               </>}
               {formKind === "agreement" && <>
-                <label className="block text-[10px] font-semibold text-[#465a4c]">Asset<select required value={form.assetId ?? ""} onChange={(event) => setForm((current) => ({ ...current, assetId: event.target.value, tenantId: "" }))} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[11px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]"><option value="">Select asset</option>{portfolio.assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name} · {asset.unitNumber}</option>)}</select></label>
+                <label className="block text-[10px] font-semibold text-[#465a4c]">Asset<select required value={form.assetId ?? ""} onChange={(event) => {
+                  const asset = portfolio.assets.find((entry) => entry.id === event.target.value);
+                  setForm((current) => ({
+                    ...current,
+                    assetId: event.target.value,
+                    tenantId: "",
+                    startDate: asset?.agreementStartDate?.slice(0, 10) ?? current.startDate ?? `${new Date().getFullYear() + 1}-01-01`,
+                  }));
+                }} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[11px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]"><option value="">Select asset</option>{portfolio.assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name} · {asset.unitNumber}</option>)}</select></label>
                 <label className="mt-3 block text-[10px] font-semibold text-[#465a4c]">Tenant<select required value={form.tenantId ?? ""} onChange={(event) => setForm((current) => ({ ...current, tenantId: event.target.value }))} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[11px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]"><option value="">Select tenant</option>{portfolio.tenants.filter((tenant) => tenant.assetIds.includes(form.assetId ?? "")).map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.fullName}{tenant.mobileNumber ? ` · +${tenant.mobileNumber}` : ""}</option>)}</select></label>
                 <label className="mt-3 block text-[10px] font-semibold text-[#465a4c]">Agreement start date<input required type="date" value={form.startDate ?? ""} onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[11px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]" /></label>
-                <p className="mt-2 rounded-lg bg-[#f7faf7] px-3 py-2.5 text-[10px] text-[#55705f]">Agreement end date: <strong>{form.startDate ? addElevenMonthTerm(form.startDate) ?? "Choose a valid start date" : "Choose a start date"}</strong> · 11 months. Upcoming-year defaults run January 1 through November 30; November 31 is not a valid date. Only one agreement is allowed for the same tenant, asset, and year.</p>
+                <p className="mt-2 rounded-lg bg-[#f7faf7] px-3 py-2.5 text-[10px] text-[#55705f]">Agreement end date: <strong>{form.startDate && formAgreementAsset ? addAgreementDuration(form.startDate, formAgreementAsset.agreementDurationUnit, formAgreementAsset.agreementDurationValue) ?? "Choose a valid start date" : "Choose a start date"}</strong> · {formAgreementAsset?.agreementDurationValue ?? 11} {formAgreementAsset?.agreementDurationUnit === "YEAR" ? "years" : "months"}. Only one agreement is allowed for the same tenant, asset, and year.</p>
                 <label className="mt-3 block text-[10px] font-semibold text-[#465a4c]">Additional terms or notes (optional)<textarea rows={3} maxLength={2000} value={form.terms ?? ""} onChange={(event) => setForm((current) => ({ ...current, terms: event.target.value }))} placeholder="Additional agreed terms..." className="mt-1.5 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 py-2 text-[11px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]" /></label>
               </>}
               {formError && <p role="alert" className="mt-4 rounded-lg bg-[#fff4ed] px-3 py-2 text-[11px] text-[#995634]">{formError}</p>}
@@ -1820,9 +1855,6 @@ export default function OwnerDashboard() {
         if (!agreement) return null;
         const tenant = portfolio.tenants.find((entry) => entry.id === agreement.tenantId);
         const asset = portfolio.assets.find((entry) => entry.id === agreement.assetId);
-        const building = asset
-          ? portfolio.buildings.find((entry) => entry.id === asset.buildingId)
-          : null;
         return (
           <AgreementApprovalWizard
             agreement={agreement as ReviewableAgreement}
@@ -1830,7 +1862,8 @@ export default function OwnerDashboard() {
             tenantName={tenant?.fullName ?? "Tenant not found"}
             tenantMobile={tenant?.mobileNumber ?? null}
             propertyName={asset ? `${asset.name} · ${asset.unitNumber}` : "Property not found"}
-            buildingAddress={building ? [building.address, building.city, building.state, building.postalCode].filter(Boolean).join(", ") : ""}
+            wardNumber={asset?.ward}
+            roomNumber={asset?.roomNumber}
             onClose={() => setReviewingAgreementId(null)}
             onApproved={() => {
               setReviewingAgreementId(null);
@@ -2269,7 +2302,7 @@ function AgreementStatusBadge({ status }: { status: AgreementStatus | null }) {
       ? "bg-[#fff7e8] text-[#9a6500]"
       : status === "Active" || status === "Approved"
         ? "bg-[#eaf5ed] text-[#286244]"
-        : status === "Awaiting owner approval" || status === "Awaiting tenant approval"
+        : status === "Awaiting owner approval" || status === "Owner approved"
           ? "bg-[#fff7e8] text-[#9a6500]"
         : "bg-[#f1f4f1] text-[#849188]";
 

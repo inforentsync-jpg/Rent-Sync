@@ -15,9 +15,6 @@ import {
 } from "lucide-react";
 import { addElevenMonthTerm } from "@/lib/rental-agreement";
 import AgreementFacts from "@/components/agreement-facts";
-import AgreementApprovalWizard, {
-  type ReviewableAgreement,
-} from "@/components/agreement-approval-wizard";
 
 type Asset = {
   id: string;
@@ -90,7 +87,6 @@ export default function TenantDashboard({ mobileNumber }: { mobileNumber: string
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [selectedAgreement, setSelectedAgreement] = useState<Agreement | null>(null);
-  const [reviewingAgreement, setReviewingAgreement] = useState<Agreement | null>(null);
 
   const loadPortal = useCallback(async () => {
     try {
@@ -219,9 +215,8 @@ export default function TenantDashboard({ mobileNumber }: { mobileNumber: string
           </section>
 
           <section id="agreements" className="mt-8 scroll-mt-24 rounded-2xl border border-[#e7ece7] bg-white shadow-[0_4px_20px_-12px_rgba(28,53,37,0.12)]">
-            <div className="border-b border-[#edf0ed] px-5 py-4 sm:px-6"><h3 className="text-[13px] font-semibold text-[#203328]">Rental agreement history</h3><p className="mt-1 text-[10px] text-[#8a968e]">Review agreement details and see both parties&apos; approval status.</p></div>
+            <div className="border-b border-[#edf0ed] px-5 py-4 sm:px-6"><h3 className="text-[13px] font-semibold text-[#203328]">Rental agreement history</h3><p className="mt-1 text-[10px] text-[#8a968e]">View your agreements and their owner approval status.</p></div>
             {!agreements.length ? <PanelMessage>No agreements have been generated yet.</PanelMessage> : <div className="divide-y divide-[#f0f2f0]">{agreements.map((agreement) => {
-              const canApprove = agreement.status === "DRAFT" && Boolean(agreement.ownerApprovedAt) && !agreement.tenantApprovedAt;
               return (
                 <div key={agreement.id} className="flex flex-col gap-3 px-5 py-4 sm:px-6">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -229,22 +224,16 @@ export default function TenantDashboard({ mobileNumber }: { mobileNumber: string
                       <p className="text-[11px] font-semibold text-[#3d5245]">{agreement.agreementNumber}</p>
                       <p className="mt-1 text-[9px] text-[#849188]">{assets.find((asset) => asset.id === agreement.assetId)?.name}</p>
                       <p className="mt-1 text-[9px] font-medium text-[#54705d]">
-                        {agreement.status === "DRAFT"
-                          ? agreement.ownerApprovedAt ? "Owner approved · Waiting for your approval" : "Waiting for owner approval"
-                          : "Owner and tenant approved"}
+                        {agreement.status === "DRAFT" && !agreement.ownerApprovedAt ? "Waiting for owner approval" : "Owner approved"}
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {canApprove ? (
-                        <button type="button" onClick={() => setReviewingAgreement(agreement)} className="rounded-lg bg-[#176b4b] px-3 py-2 text-[9px] font-semibold text-white hover:bg-[#10583c]">Review & approve</button>
-                      ) : null}
                       <button type="button" onClick={() => setSelectedAgreement(agreement)} className="rounded-lg border border-[#dce8de] px-3 py-2 text-[9px] font-semibold text-[#286244] hover:bg-[#f2f7f3]">View agreement</button>
                     </div>
                   </div>
                   <AgreementFacts startDate={agreement.startDate} endDate={agreement.endDate} monthlyRent={agreement.monthlyRent} advanceAmount={agreement.securityDeposit} compact />
                   <div className="grid gap-2 text-[9px] text-[#718078] sm:grid-cols-2">
                     <p>Owner approved: {formatApprovalDate(agreement.ownerApprovedAt, agreement.status)}</p>
-                    <p>Tenant approved: {formatApprovalDate(agreement.tenantApprovedAt, agreement.status)}</p>
                   </div>
                 </div>
               );
@@ -297,7 +286,6 @@ export default function TenantDashboard({ mobileNumber }: { mobileNumber: string
               <div className="mt-4 border-t border-[#e7ece7] pt-4"><h3 className="text-[11px] font-semibold text-[#294034]">Important terms</h3><p className="mt-2 whitespace-pre-wrap text-[10px] leading-5 text-[#65756b]">{selectedAgreement.importantTerms?.trim() || "No important terms entered."}</p></div>
               <div className="mt-4 grid gap-2 border-t border-[#e7ece7] pt-4 text-[10px] text-[#65756b] sm:grid-cols-2">
                 <p>Owner approved: {formatApprovalDate(selectedAgreement.ownerApprovedAt, selectedAgreement.status)}</p>
-                <p>Tenant approved: {formatApprovalDate(selectedAgreement.tenantApprovedAt, selectedAgreement.status)}</p>
               </div>
               <div className="mt-12 grid grid-cols-2 gap-10 text-[10px] text-[#52645a]"><div className="border-t border-[#89968d] pt-2">Owner signature & date</div><div className="border-t border-[#89968d] pt-2">Tenant signature & date</div></div>
             </article>
@@ -305,26 +293,6 @@ export default function TenantDashboard({ mobileNumber }: { mobileNumber: string
           </section>
         </div>
       )}
-      {reviewingAgreement ? (() => {
-        const asset = assets.find((entry) => entry.id === reviewingAgreement.assetId);
-        return (
-          <AgreementApprovalWizard
-            agreement={reviewingAgreement as ReviewableAgreement}
-            party="TENANT"
-            tenantName={portal?.tenant.fullName ?? "Tenant"}
-            tenantMobile={portal?.tenant.mobileNumber ?? mobileNumber}
-            propertyName={asset ? `${asset.name} · ${asset.unitNumber}` : "Property"}
-            buildingAddress={asset
-              ? [asset.buildingAddress, asset.city, asset.state, asset.postalCode].filter(Boolean).join(", ")
-              : ""}
-            onClose={() => setReviewingAgreement(null)}
-            onApproved={() => {
-              setReviewingAgreement(null);
-              void loadPortal();
-            }}
-          />
-        );
-      })() : null}
     </div>
   );
 }

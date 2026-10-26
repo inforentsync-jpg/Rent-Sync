@@ -8,6 +8,8 @@ export async function generateAnnualAgreementDrafts(now = new Date()) {
       id: true,
       monthlyRent: true,
       securityDeposit: true,
+      agreementDurationUnit: true,
+      agreementDurationValue: true,
       building: {
         select: {
           ownerId: true,
@@ -47,6 +49,8 @@ export async function generateAnnualAgreementDrafts(now = new Date()) {
         latestAgreement.startDate.toISOString().slice(0, 10),
         latestAgreement.endDate.toISOString().slice(0, 10),
         now,
+        asset.agreementDurationUnit === "YEAR" ? "YEAR" : "MONTH",
+        asset.agreementDurationValue,
       );
       if (!term || tenantAgreements.some((agreement) => agreement.agreementYear === term.year)) {
         return [];

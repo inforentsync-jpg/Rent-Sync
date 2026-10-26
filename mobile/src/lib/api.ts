@@ -95,6 +95,26 @@ export function getOwnerPortfolio<T>(session: MobileSession) {
   return authenticatedRequest<T>(session, "/api/owner/portfolio");
 }
 
+export function getTenantShareLinks<T>(session: MobileSession) {
+  return authenticatedRequest<T>(session, "/api/owner/tenants/share-links");
+}
+
+export function createTenantShareLink<T>(session: MobileSession, tenantId: string) {
+  return authenticatedRequest<T>(
+    session,
+    `/api/owner/tenants/${encodeURIComponent(tenantId)}/share`,
+    { method: "POST" },
+  );
+}
+
+export function revokeTenantShareLink<T>(session: MobileSession, tenantId: string) {
+  return authenticatedRequest<T>(
+    session,
+    `/api/owner/tenants/${encodeURIComponent(tenantId)}/share`,
+    { method: "DELETE" },
+  );
+}
+
 export function getTenantAgreements<T>(session: MobileSession) {
   return authenticatedRequest<T>(session, "/api/tenant/agreements");
 }

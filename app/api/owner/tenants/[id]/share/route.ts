@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/database";
 import { getOwnerSession } from "@/lib/session";
 import { shouldUseDatabase } from "@/lib/storage-mode";
+import { encryptTenantShareToken } from "@/lib/tenant-share-token";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -34,11 +35,14 @@ export async function POST(_request: Request, { params }: RouteContext) {
     const tokenHash = createHash("sha256").update(token).digest("hex");
     await prisma.tenant.update({
       where: { id: tenant.id },
-      data: { publicShareTokenHash: tokenHash },
+      data: {
+        publicShareTokenHash: tokenHash,
+        publicShareTokenEncrypted: encryptTenantShareToken(token),
+      },
       select: { id: true },
     });
 
-    return NextResponse.json({ token });
+    return NextResponse.json({ token }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Unable to create tenant share link.", error);
     return NextResponse.json({ error: "Unable to create a tenant share link." }, { status: 503 });
@@ -59,7 +63,7 @@ export async function DELETE(_request: Request, { params }: RouteContext) {
 
     await prisma.tenant.update({
       where: { id: tenant.id },
-      data: { publicShareTokenHash: null },
+      data: { publicShareTokenHash: null, publicShareTokenEncrypted: null },
       select: { id: true },
     });
     return NextResponse.json({ success: true });

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Check, ChevronLeft, ChevronRight, LoaderCircle, X } from "lucide-react";
-import { addElevenMonthTerm } from "@/lib/rental-agreement";
+import { addAgreementDuration, type AgreementDurationUnit } from "@/lib/agreement-duration";
 
 export type ReviewableAgreement = {
   id: string;
@@ -13,6 +13,10 @@ export type ReviewableAgreement = {
   endDate: string;
   monthlyRent: number;
   securityDeposit: number;
+  agreementDurationUnit?: AgreementDurationUnit;
+  agreementDurationValue?: number;
+  ward?: string | null;
+  roomNumber?: string | null;
   terms: string;
   importantTerms?: string;
   templateTerms?: Array<{
@@ -51,17 +55,19 @@ export default function AgreementApprovalWizard({
   tenantName,
   tenantMobile,
   propertyName,
-  buildingAddress,
+  wardNumber,
+  roomNumber,
   onClose,
   onApproved,
 }: {
   agreement: ReviewableAgreement;
-  party: "OWNER" | "TENANT" | "PUBLIC";
+  party: "OWNER" | "PUBLIC";
   readOnly?: boolean;
   tenantName: string;
   tenantMobile: string | null;
   propertyName: string;
-  buildingAddress: string;
+  wardNumber?: string | null;
+  roomNumber?: string | null;
   onClose: () => void;
   onApproved: () => void;
 }) {
@@ -70,11 +76,11 @@ export default function AgreementApprovalWizard({
   const [startDate, setStartDate] = useState(agreement.startDate.slice(0, 10));
   const [monthlyRent, setMonthlyRent] = useState(String(agreement.monthlyRent));
   const [securityDeposit, setSecurityDeposit] = useState(String(agreement.securityDeposit));
-  const [terms, setTerms] = useState(agreement.terms ?? "");
-  const [importantTerms, setImportantTerms] = useState(agreement.importantTerms ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const endDate = addElevenMonthTerm(startDate);
+  const durationUnit = agreement.agreementDurationUnit ?? "MONTH";
+  const durationValue = agreement.agreementDurationValue ?? 11;
+  const endDate = addAgreementDuration(startDate, durationUnit, durationValue);
   const mappedTerms = agreement.templateTerms?.flatMap((template) => template.items) ?? [];
   const importantObligations = mappedTerms
     .map((item, index) => ({ ...item, serialNumber: index + 1 }))
@@ -97,7 +103,7 @@ export default function AgreementApprovalWizard({
     const rent = Number(monthlyRent);
     const deposit = Number(securityDeposit);
     if (!endDate || !Number.isSafeInteger(rent) || rent <= 0 || !Number.isSafeInteger(deposit) || deposit < 0) {
-      setError("Enter a valid 11-month period, monthly rent, and security deposit.");
+      setError(`Enter a valid ${durationValue}-${durationUnit.toLowerCase()} period, monthly rent, and security deposit.`);
       return;
     }
     setSaving(true);
@@ -111,8 +117,6 @@ export default function AgreementApprovalWizard({
           endDate,
           monthlyRent: rent,
           securityDeposit: deposit,
-          terms,
-          importantTerms,
         }),
       });
       const payload = await response.json();
@@ -139,12 +143,11 @@ export default function AgreementApprovalWizard({
         <div className="flex shrink-0 items-start justify-between border-b border-[#edf0ed] px-4 py-3 sm:px-7 sm:py-4">
           <div>
             <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#6b8a76]">
-              {readOnly ? "Public read-only review" : party === "OWNER" ? "Owner approval" : "Tenant approval"}
+              {readOnly ? "Public read-only review" : "Owner approval"}
             </p>
             <h2 id="agreement-review-title" className="mt-1 text-[18px] font-semibold text-[#203328]">
               Review agreement
             </h2>
-            <p className="mt-1 text-[11px] text-[#79867e]">{agreement.agreementNumber}</p>
           </div>
           <button
             type="button"
@@ -177,17 +180,17 @@ export default function AgreementApprovalWizard({
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-7">
           {step.id === "kyc" ? (
             <>
-              <ReviewHeading title="Tenant and property details" text="Check who and what this agreement covers." />
+              <ReviewHeading title="Tenant and unit details" text="Check the tenant, ward number, and room number." />
               <div className="grid gap-3 sm:grid-cols-2">
                 <ReviewValue label="Tenant" value={tenantName} />
                 <ReviewValue label="Tenant mobile" value={readOnly ? "Private on this page" : tenantMobile ? `+${tenantMobile}` : "Not provided"} />
-                <ReviewValue label="Property" value={propertyName} />
-                <ReviewValue label="Address" value={buildingAddress || "Not recorded"} />
+                <ReviewValue label="Ward No." value={wardNumber || "Not recorded"} />
+                <ReviewValue label="Room No." value={roomNumber || "Not recorded"} />
               </div>
               <p className="rounded-lg bg-[#f7faf7] px-3 py-2 text-[10px] leading-5 text-[#718078]">
                 {readOnly
                   ? "Private contact and identity details are not displayed on this shared page."
-                  : "KYC documents are not stored in Rent-Sync. Contact the account owner if the registered tenant or property details need correction."}
+                  : "KYC documents are not stored in Rent-Sync. Contact the account owner if the tenant, ward number, or room number needs correction."}
               </p>
             </>
           ) : null}
@@ -206,14 +209,14 @@ export default function AgreementApprovalWizard({
             <>
               <ReviewHeading
                 title="Agreement expiry"
-                text={readOnly ? "View the agreement start date and automatically calculated end date." : "Confirm the agreement start date and its automatically calculated 11-month end date."}
+                text={readOnly ? "View the agreement start date and automatically calculated end date." : `Confirm the agreement start date and its automatically calculated ${durationValue}-${durationUnit.toLowerCase()} end date.`}
               />
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block text-[10px] font-semibold text-[#465a4c]">
                   Agreement start date
                   <input type="date" required disabled={readOnly} value={startDate} onChange={(event) => setStartDate(event.target.value)} className={inputClass} />
                 </label>
-                <ReviewValue label="Agreement end date (11 months)" value={endDate ?? "Choose a valid start date"} />
+                <ReviewValue label={`Agreement end date (${durationValue} ${durationUnit.toLowerCase()}${durationValue === 1 ? "" : "s"})`} value={endDate ?? "Choose a valid start date"} />
               </div>
             </>
           ) : null}
@@ -230,7 +233,7 @@ export default function AgreementApprovalWizard({
 
           {step.id === "terms" ? (
             readOnly ? (
-              mappedTerms.length || terms.trim() ? (
+              mappedTerms.length ? (
                 <ol className="space-y-2 rounded-xl border border-[#e7ece7] bg-[#f9fbf9] p-4 text-[13px] leading-6 text-[#53675a]">
                   {mappedTerms.map((item, index) => (
                     <li key={item.id} className="flex gap-2">
@@ -238,19 +241,13 @@ export default function AgreementApprovalWizard({
                       <span>{item.text}</span>
                     </li>
                   ))}
-                  {terms.trim() ? (
-                    <li className="flex gap-2">
-                      <span className="shrink-0 font-semibold text-[#294034]">{mappedTerms.length + 1}.</span>
-                      <span className="whitespace-pre-wrap">{terms.trim()}</span>
-                    </li>
-                  ) : null}
                 </ol>
               ) : null
             ) : (
               <>
                 <ReviewHeading
                   title="Agreement terms"
-                  text="Review the property terms attached to this unit and edit additional conditions, if needed."
+                  text="These terms are managed in the Terms module and cannot be changed during approval."
                 />
                 <ol className="space-y-2 rounded-xl border border-[#e7ece7] bg-[#f9fbf9] p-4 text-[10px] leading-6 text-[#53675a]">
                   {mappedTerms.length ? mappedTerms.map((item, index) => (
@@ -263,10 +260,6 @@ export default function AgreementApprovalWizard({
                     </li>
                   )) : <li>No property terms are mapped to this unit.</li>}
                 </ol>
-                <label className="block text-[10px] font-semibold text-[#465a4c]">
-                  Terms and notes
-                  <textarea rows={7} maxLength={2000} value={terms} onChange={(event) => setTerms(event.target.value)} placeholder="Add agreed conditions..." className="mt-1.5 w-full resize-y rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 py-2.5 text-[12px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]" />
-                </label>
               </>
             )
           ) : null}
@@ -275,7 +268,7 @@ export default function AgreementApprovalWizard({
             <>
               <ReviewHeading
                 title="Important terms"
-                text={readOnly ? "Review the obligations marked by the owner and any other important conditions." : "Review the obligations marked by the owner and add any other important conditions."}
+                text="Important obligations are managed in the Terms module and cannot be changed during approval."
               />
               {importantObligations.length ? (
                 <ol className={`space-y-2 rounded-xl border border-[#f1dfb4] bg-[#fffaf0] p-4 leading-6 text-[#53675a] ${readOnly ? "text-[13px]" : "text-[10px]"}`}>
@@ -287,10 +280,6 @@ export default function AgreementApprovalWizard({
                   ))}
                 </ol>
               ) : <p className="rounded-lg bg-[#f7faf7] px-3 py-2 text-[10px] text-[#718078]">No mapped terms have been marked as important obligations.</p>}
-              <label className="block text-[10px] font-semibold text-[#465a4c]">
-                Important terms
-                <textarea rows={7} maxLength={4000} disabled={readOnly} value={importantTerms} onChange={(event) => setImportantTerms(event.target.value)} placeholder="Add important obligations or conditions..." className="mt-1.5 w-full resize-y rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 py-2.5 text-[12px] font-normal text-[#33473a] outline-none focus:border-[#8cbd9b]" />
-              </label>
             </>
           ) : null}
 
@@ -306,10 +295,10 @@ export default function AgreementApprovalWizard({
                 <ReviewValue label="Monthly rent" value={`₹${Number(monthlyRent || 0).toLocaleString("en-IN")}`} />
                 <ReviewValue label="Security deposit" value={`₹${Number(securityDeposit || 0).toLocaleString("en-IN")}`} />
                 <ReviewValue label="Agreement period" value={`${startDate || "—"} to ${endDate ?? "—"}`} />
-                <ReviewValue label="Your role" value={party === "OWNER" ? "Owner" : party === "TENANT" ? "Tenant" : "Public viewer"} />
+                <ReviewValue label="Your role" value={party === "OWNER" ? "Owner" : "Public viewer"} />
               </div>
               {readOnly ? (
-                mappedTerms.length || terms.trim() ? (
+                mappedTerms.length ? (
                   <ol className="space-y-1.5 rounded-xl border border-[#e7ece7] bg-[#f9fbf9] p-4 text-[12px] leading-6 text-[#53675a]">
                     {mappedTerms.map((item, index) => (
                       <li key={item.id} className="flex gap-2">
@@ -317,12 +306,6 @@ export default function AgreementApprovalWizard({
                         <span>{item.text}</span>
                       </li>
                     ))}
-                    {terms.trim() ? (
-                      <li className="flex gap-2">
-                        <span className="shrink-0 font-semibold text-[#294034]">{mappedTerms.length + 1}.</span>
-                        <span className="whitespace-pre-wrap">{terms.trim()}</span>
-                      </li>
-                    ) : null}
                   </ol>
                 ) : null
               ) : (
@@ -346,13 +329,8 @@ export default function AgreementApprovalWizard({
                   <div className="rounded-xl border border-[#e7ece7] p-4">
                     <p className="text-[10px] font-semibold text-[#465a4c]">Approval record</p>
                     <p className="mt-2 text-[10px] text-[#718078]">Owner: {formatDateTime(agreement.ownerApprovedAt)}</p>
-                    <p className="mt-1 text-[10px] text-[#718078]">Tenant: {formatDateTime(agreement.tenantApprovedAt)}</p>
                   </div>
-                  <p className="text-[10px] leading-5 text-[#718078]">
-                    {party === "OWNER"
-                      ? "The tenant will be asked to review and approve after you. Any changes made during their review will require your approval again."
-                      : "If you change any agreement details, the owner must review and approve the updated version again."}
-                  </p>
+                  <p className="text-[10px] leading-5 text-[#718078]">The agreement becomes active after owner approval. The tenant can view the approved agreement in their portal.</p>
                 </>
               ) : null}
             </>
@@ -375,7 +353,7 @@ export default function AgreementApprovalWizard({
             ) : (
               <button type="button" onClick={() => readOnly ? onClose() : void approve()} disabled={saving} className="col-span-2 flex h-10 min-w-0 items-center justify-center gap-2 rounded-lg bg-[#176b4b] px-2 text-[11px] font-semibold text-white hover:bg-[#10583c] disabled:opacity-60 sm:col-span-1 sm:px-4">
                 {readOnly ? <Check size={14} /> : saving ? <LoaderCircle size={14} className="animate-spin" /> : <Check size={14} />}
-                {readOnly ? "Done" : saving ? "Saving approval..." : "Approve agreement"}
+                {readOnly ? "Done" : saving ? "Saving approval..." : "Approve as owner"}
               </button>
             )}
           </div>

@@ -308,7 +308,6 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
           tenantName={data.tenant.fullName}
           tenantMobile={data.tenant.mobileNumber ? `+${data.tenant.mobileNumber}` : null}
           propertyName={reviewingAgreement.propertyName}
-          buildingAddress={reviewingAgreement.buildingAddress}
           onClose={() => setReviewingAgreement(null)}
           onApproved={() => setReviewingAgreement(null)}
         />

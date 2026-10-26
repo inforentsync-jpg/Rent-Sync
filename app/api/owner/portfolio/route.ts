@@ -18,9 +18,18 @@ import {
   updateDevPortfolioItem,
 } from "@/lib/dev-store";
 import { getOwnerSession } from "@/lib/session";
-import { addElevenMonthTerm, hasValidElevenMonthTerm } from "@/lib/rental-agreement";
+import { hasValidElevenMonthTerm } from "@/lib/rental-agreement";
 import { getRenewalAgreementTerm } from "@/lib/agreement-year";
 import { shouldUseDatabase } from "@/lib/storage-mode";
+import {
+  addAgreementDuration,
+  DEFAULT_AGREEMENT_DURATION_UNIT,
+  DEFAULT_AGREEMENT_DURATION_VALUE,
+  hasValidAgreementDurationTerm,
+  isAgreementDurationUnit,
+  isValidAgreementDuration,
+  isValidIsoDate,
+} from "@/lib/agreement-duration";
 
 type PortfolioInput = Record<string, unknown>;
 
@@ -59,6 +68,28 @@ function positiveAmount(input: PortfolioInput, key: string, allowZero = false) {
   if (typeof value !== "number" || !Number.isInteger(value)) return null;
   if (allowZero ? value < 0 : value <= 0) return null;
   return value;
+}
+
+function agreementSettings(input: PortfolioInput) {
+  const unit = input.agreementDurationUnit === undefined
+    ? DEFAULT_AGREEMENT_DURATION_UNIT
+    : isAgreementDurationUnit(input.agreementDurationUnit)
+      ? input.agreementDurationUnit
+      : null;
+  const value = input.agreementDurationValue === undefined
+    ? DEFAULT_AGREEMENT_DURATION_VALUE
+    : input.agreementDurationValue;
+  const startDate = optionalText(input, "agreementStartDate", 10);
+  if (
+    !unit ||
+    typeof value !== "number" ||
+    !isValidAgreementDuration(value, unit) ||
+    startDate === undefined ||
+    (startDate !== null && !isValidIsoDate(startDate))
+  ) {
+    return null;
+  }
+  return { unit, value, startDate };
 }
 
 export async function GET() {
@@ -217,6 +248,9 @@ export async function GET() {
         securityDeposit: asset.securityDeposit,
         externalBuildingId: asset.externalBuildingId ?? null,
         ward: asset.ward ?? null,
+        agreementDurationUnit: asset.agreementDurationUnit,
+        agreementDurationValue: asset.agreementDurationValue,
+        agreementStartDate: asset.agreementStartDate ?? null,
         ksmartBuildingId: asset.ksmartBuildingId ?? null,
         ksrbId: asset.ksrbId ?? null,
         templateIds: asset.termTemplates.map(({ id }) => id),
@@ -265,9 +299,16 @@ export async function POST(request: Request) {
     const startDate = text(body, "startDate", 10);
     const endDate = text(body, "endDate", 10);
     const terms = typeof body.terms === "string" ? body.terms.trim() : "";
-    if (!assetId || !tenantId || !startDate || !endDate || !hasValidElevenMonthTerm(startDate, endDate)) {
+    if (
+      !assetId ||
+      !tenantId ||
+      !startDate ||
+      !endDate ||
+      !isValidIsoDate(startDate) ||
+      !isValidIsoDate(endDate)
+    ) {
       return NextResponse.json(
-        { error: "Select an asset and tenant, and enter a valid 11-month agreement term." },
+        { error: "Select an asset and tenant, and enter valid agreement dates." },
         { status: 400 },
       );
     }
@@ -286,6 +327,17 @@ export async function POST(request: Request) {
           return NextResponse.json(
             { error: "Choose an asset and a tenant assigned to that asset in your account." },
             { status: 404 },
+          );
+        }
+        if (!hasValidAgreementDurationTerm(
+          startDate,
+          endDate,
+          asset.agreementDurationUnit,
+          asset.agreementDurationValue,
+        )) {
+          return NextResponse.json(
+            { error: "The end date must match the duration configured for this asset." },
+            { status: 400 },
           );
         }
         const agreement = await createDevAgreement({
@@ -324,6 +376,17 @@ export async function POST(request: Request) {
         return NextResponse.json(
           { error: "Choose an asset and a tenant assigned to that asset in your account." },
           { status: 404 },
+        );
+      }
+      if (!hasValidAgreementDurationTerm(
+        startDate,
+        endDate,
+        asset.agreementDurationUnit === "YEAR" ? "YEAR" : "MONTH",
+        asset.agreementDurationValue,
+      )) {
+        return NextResponse.json(
+          { error: "The end date must match the duration configured for this asset." },
+          { status: 400 },
         );
       }
 
@@ -431,6 +494,7 @@ export async function POST(request: Request) {
         const roomNumber = optionalText(body, "roomNumber", 40);
         const ksmartBuildingId = optionalText(body, "ksmartBuildingId", 60);
         const ksrbId = optionalText(body, "ksrbId", 60);
+        const settings = agreementSettings(body);
         if (
           !buildingId ||
           !name ||
@@ -441,9 +505,11 @@ export async function POST(request: Request) {
           ward === undefined ||
           roomNumber === undefined ||
           ksmartBuildingId === undefined ||
-          ksrbId === undefined
+          ksrbId === undefined ||
+          !settings ||
+          !settings.startDate
         ) {
-          return NextResponse.json({ error: "Complete asset details using valid rent and deposit amounts." }, { status: 400 });
+          return NextResponse.json({ error: "Complete asset details and provide a valid agreement duration and start date." }, { status: 400 });
         }
         const asset = await createDevAsset(session.mobileNumber, {
           buildingId,
@@ -452,6 +518,9 @@ export async function POST(request: Request) {
           unitNumber,
           monthlyRent,
           securityDeposit,
+          agreementDurationUnit: settings.unit,
+          agreementDurationValue: settings.value,
+          agreementStartDate: settings.startDate,
           externalBuildingId,
           ward,
           roomNumber,
@@ -473,7 +542,7 @@ export async function POST(request: Request) {
         const email = optionalText(body, "email", 254);
         const photo = photoDataUrl(body);
         if (!fullName || Boolean(assetId) !== Boolean(startDate) ||
-          (startDate && !addElevenMonthTerm(startDate)) ||
+          (startDate && !isValidIsoDate(startDate)) ||
           (mobileNumber && !/^\d{10,15}$/.test(mobileNumber))) {
           return NextResponse.json({ error: "Enter a tenant name. To create an agreement, select both an asset and a valid start date. If provided, the mobile number must be valid." }, { status: 400 });
         }
@@ -552,14 +621,22 @@ export async function POST(request: Request) {
       const roomNumber = optionalText(body, "roomNumber", 40);
       const ksmartBuildingId = optionalText(body, "ksmartBuildingId", 60);
       const ksrbId = optionalText(body, "ksrbId", 60);
+      const settings = agreementSettings(body);
       if (!buildingId || !name || !assetType || !unitNumber || monthlyRent === null || securityDeposit === null ||
         ward === undefined ||
-        roomNumber === undefined || ksmartBuildingId === undefined || ksrbId === undefined) {
-        return NextResponse.json({ error: "Complete asset details using valid rent and deposit amounts." }, { status: 400 });
+        roomNumber === undefined || ksmartBuildingId === undefined || ksrbId === undefined ||
+        !settings || !settings.startDate) {
+        return NextResponse.json({ error: "Complete asset details and provide a valid agreement duration and start date." }, { status: 400 });
       }
       const building = await prisma.building.findFirst({ where: { id: buildingId, ownerId: owner.id } });
       if (!building) return NextResponse.json({ error: "Building not found in your account." }, { status: 404 });
-      const asset = await prisma.asset.create({ data: { buildingId, name, assetType, unitNumber, roomNumber, monthlyRent, securityDeposit, externalBuildingId, ward, ksmartBuildingId, ksrbId } });
+      const asset = await prisma.asset.create({ data: {
+        buildingId, name, assetType, unitNumber, roomNumber, monthlyRent, securityDeposit,
+        externalBuildingId, ward, ksmartBuildingId, ksrbId,
+        agreementDurationUnit: settings.unit,
+        agreementDurationValue: settings.value,
+        agreementStartDate: new Date(`${settings.startDate}T00:00:00.000Z`),
+      } });
       return NextResponse.json({ asset }, { status: 201 });
     }
     if (kind === "tenant") {
@@ -568,7 +645,6 @@ export async function POST(request: Request) {
       const rawMobile = text(body, "mobileNumber", 20);
       const mobileNumber = rawMobile?.replace(/\D/g, "");
       const startDate = text(body, "startDate", 10);
-      const endDate = startDate ? addElevenMonthTerm(startDate) : null;
       const businessName = optionalText(body, "businessName", 160);
       const fullAddress = optionalText(body, "fullAddress", 2000);
       const aadhaarNumber = optionalText(body, "aadhaarNumber", 20);
@@ -576,7 +652,7 @@ export async function POST(request: Request) {
       const email = optionalText(body, "email", 254);
       const photo = photoDataUrl(body);
       if (!fullName || Boolean(assetId) !== Boolean(startDate) ||
-        (startDate && !endDate) ||
+        (startDate && !isValidIsoDate(startDate)) ||
         (mobileNumber && !/^\d{10,15}$/.test(mobileNumber))) {
         return NextResponse.json({ error: "Enter a tenant name. To create an agreement, select both an asset and a valid start date. If provided, the mobile number must be valid." }, { status: 400 });
       }
@@ -585,7 +661,7 @@ export async function POST(request: Request) {
         (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
         return NextResponse.json({ error: "Check the optional tenant KYC details and photo." }, { status: 400 });
       }
-      if (!assetId || !startDate || !endDate) {
+      if (!assetId || !startDate) {
         const existingTenant = mobileNumber
           ? await prisma.tenant.findUnique({ where: { mobileNumber } })
           : null;
@@ -606,6 +682,12 @@ export async function POST(request: Request) {
         where: { id: assetId, building: { ownerId: owner.id } },
       });
       if (!asset) return NextResponse.json({ error: "Asset not found in your account." }, { status: 404 });
+      const endDate = addAgreementDuration(
+        startDate,
+        asset.agreementDurationUnit === "YEAR" ? "YEAR" : "MONTH",
+        asset.agreementDurationValue,
+      );
+      if (!endDate) return NextResponse.json({ error: "Choose a valid agreement start date." }, { status: 400 });
       const startsAt = new Date(`${startDate}T00:00:00.000Z`);
       const endsAt = new Date(`${endDate}T00:00:00.000Z`);
       const agreementYear = Number(startDate.slice(0, 4));
@@ -966,6 +1048,7 @@ export async function PATCH(request: Request) {
   const roomNumber = optionalText(body, "roomNumber", 40);
   const ksmartBuildingId = optionalText(body, "ksmartBuildingId", 60);
   const ksrbId = optionalText(body, "ksrbId", 60);
+  const settings = agreementSettings(body);
   if (
     !assetId ||
     !buildingId ||
@@ -977,9 +1060,11 @@ export async function PATCH(request: Request) {
     ward === undefined ||
     roomNumber === undefined ||
     ksmartBuildingId === undefined ||
-    ksrbId === undefined
+    ksrbId === undefined ||
+    !settings ||
+    !settings.startDate
   ) {
-    return NextResponse.json({ error: "Complete all asset fields using valid rent and deposit amounts." }, { status: 400 });
+    return NextResponse.json({ error: "Complete all asset fields using valid rent, deposit, duration, and start date." }, { status: 400 });
   }
 
   const input = {
@@ -994,6 +1079,9 @@ export async function PATCH(request: Request) {
     roomNumber,
     ksmartBuildingId,
     ksrbId,
+    agreementDurationUnit: settings.unit,
+    agreementDurationValue: settings.value,
+    agreementStartDate: settings.startDate,
   };
 
   if (!shouldUseDatabase()) {
@@ -1036,7 +1124,10 @@ export async function PATCH(request: Request) {
 
     const updatedAsset = await prisma.asset.update({
       where: { id: assetId },
-      data: input,
+      data: {
+        ...input,
+        agreementStartDate: new Date(`${input.agreementStartDate}T00:00:00.000Z`),
+      },
     });
     return NextResponse.json({ asset: updatedAsset });
   } catch (error) {

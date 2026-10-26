@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Modal,
   Pressable,
   Platform,
   RefreshControl,
+  Share,
   ScrollView,
   StyleSheet,
   Text,
@@ -23,6 +25,7 @@ import {
   FileCheck2,
   KeyRound,
   LogOut,
+  Folder,
   Plus,
   Pencil,
   ShieldCheck,
@@ -42,20 +45,30 @@ import {
   Page,
   Panel,
 } from "@/components/ui";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   approveAgreement,
   authenticatedRequest,
   createPortfolioItem,
+  createTenantShareLink,
   deletePortfolioItem,
   getAdminAccounts,
   getOwnerPortfolio,
   getTenantAgreements,
+  getTenantShareLinks,
+  revokeTenantShareLink,
   resetAccountPassword,
   shareAgreementPdf,
   updateOwnerProfile,
   updatePortfolioItem,
 } from "@/lib/api";
-import { clearSession, type MobileSession } from "@/lib/session";
+import { clearSession, readApiBaseUrl, type MobileSession } from "@/lib/session";
+import {
+  addAgreementDuration,
+  DEFAULT_AGREEMENT_DURATION_UNIT,
+  DEFAULT_AGREEMENT_DURATION_VALUE,
+  type AgreementDurationUnit,
+} from "@/lib/agreement-duration";
 import { colors } from "@/theme";
 
 const deleteGuidance: Record<string, string> = {
@@ -77,6 +90,15 @@ type Agreement = {
   securityDeposit: number;
   terms: string;
   importantTerms?: string;
+  templateTerms?: Array<{
+    templateId?: string;
+    heading: string;
+    items: Array<{
+      id: string;
+      text: string;
+      importantObligation: boolean;
+    }>;
+  }>;
   status: string;
   ownerApprovedAt?: string | null;
   tenantApprovedAt?: string | null;
@@ -104,14 +126,34 @@ type Asset = {
   tenantIds?: string[];
   buildingName?: string;
   buildingAddress?: string;
+  ward?: string | null;
+  roomNumber?: string | null;
+  agreementDurationUnit?: AgreementDurationUnit;
+  agreementDurationValue?: number;
+  agreementStartDate?: string | null;
+  templateIds?: string[];
+  termTemplates?: TermsTemplate[];
   city?: string;
   state?: string;
+};
+type TermsTemplate = {
+  id: string;
+  name: string;
+  assetIds?: string[];
+  items: Array<{
+    id: string;
+    position: number;
+    text: string;
+    importantObligation: boolean;
+  }>;
 };
 type Tenant = {
   id: string;
   fullName: string;
   mobileNumber?: string | null;
   assetIds?: string[];
+  publicShareEnabled?: boolean;
+  publicShareUrl?: string | null;
 };
 type Portfolio = {
   owner: { id: string; fullName: string; mobileNumber: string; email?: string | null };
@@ -120,6 +162,7 @@ type Portfolio = {
   assets: Asset[];
   tenants: Tenant[];
   agreements: Agreement[];
+  termsTemplates?: TermsTemplate[];
 };
 type TenantPortal = {
   tenant: Tenant;
@@ -147,8 +190,6 @@ type ReviewValues = {
   endDate: string;
   monthlyRent: string;
   securityDeposit: string;
-  terms: string;
-  importantTerms: string;
 };
 
 type CreateKind = "company" | "building" | "asset" | "tenant" | "agreement";
@@ -192,17 +233,12 @@ function titleCase(value: string) {
 
 function getAgreementState(agreement: Agreement) {
   if (agreement.status === "ACTIVE") return "Active";
-  if (agreement.ownerApprovedAt && agreement.tenantApprovedAt) return "Approved";
-  if (agreement.ownerApprovedAt || agreement.tenantApprovedAt) return "Awaiting approval";
+  if (agreement.ownerApprovedAt) return "Owner approved";
   return "Draft";
 }
 
 function ownerNeedsReview(agreement: Agreement) {
-  return agreement.status !== "ACTIVE" && !agreement.ownerApprovedAt;
-}
-
-function tenantNeedsReview(agreement: Agreement) {
-  return agreement.status !== "ACTIVE" && !agreement.tenantApprovedAt;
+  return agreement.status === "DRAFT";
 }
 
 export default function WorkspaceScreen({
@@ -223,6 +259,7 @@ export default function WorkspaceScreen({
   const [tenantPortal, setTenantPortal] = useState<TenantPortal | null>(null);
   const [accounts, setAccounts] = useState<AdminAccounts>({ owners: [], tenants: [] });
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [tenantShareLoadError, setTenantShareLoadError] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -238,8 +275,34 @@ export default function WorkspaceScreen({
           getOwnerPortfolio<Portfolio>(session),
           authenticatedRequest<{ profile: Profile }>(session, "/api/owner/profile"),
         ]);
+        let tenants = nextPortfolio.tenants;
+        setTenantShareLoadError("");
+        try {
+          const [shareResponse, baseUrl] = await Promise.all([
+            getTenantShareLinks<{ links: Array<{ tenantId: string; token: string | null }> }>(session),
+            readApiBaseUrl(),
+          ]);
+          const shareUrls = new Map(
+            shareResponse.links
+              .filter((link): link is { tenantId: string; token: string } => Boolean(link.token))
+              .map((link) => [
+                link.tenantId,
+                baseUrl
+                  ? new URL(`/share/tenant/${encodeURIComponent(link.token)}`, baseUrl).toString()
+                  : null,
+              ]),
+          );
+          tenants = tenants.map((tenant) => ({
+            ...tenant,
+            publicShareUrl: shareUrls.get(tenant.id) ?? null,
+          }));
+        } catch (cause) {
+          setTenantShareLoadError(
+            cause instanceof Error ? cause.message : "Unable to load tenant share links.",
+          );
+        }
         setError("");
-        setPortfolio(nextPortfolio);
+        setPortfolio({ ...nextPortfolio, tenants });
         setProfile(nextProfile.profile);
       } else if (session.role === "TENANT") {
         const nextPortal = await getTenantAgreements<TenantPortal>(session);
@@ -299,7 +362,7 @@ export default function WorkspaceScreen({
       ? ["Owners", "Tenants"]
       : session.role === "TENANT"
         ? ["Home", "Agreements"]
-        : ["Home", "Agreements", "People", "Profile"];
+      : ["Home", "Agreements", "Terms", "People", "Profile"];
 
   return (
     <View style={styles.screen}>
@@ -381,6 +444,7 @@ export default function WorkspaceScreen({
               onDelete={removePortfolioItem}
               onReview={setReviewing}
               onProfileSaved={loadData}
+              tenantShareLoadError={tenantShareLoadError}
               onSignOut={() => void signOut()}
             />
           ) : null}
@@ -391,7 +455,6 @@ export default function WorkspaceScreen({
             <TenantWorkspace
               section={section}
               portal={tenantPortal}
-              onReview={setReviewing}
             />
           ) : null}
           {session.role === "TENANT" && !tenantPortal && error ? (
@@ -460,6 +523,7 @@ function OwnerWorkspace({
   onDelete,
   onReview,
   onProfileSaved,
+  tenantShareLoadError,
   onSignOut,
 }: {
   section: string;
@@ -471,8 +535,13 @@ function OwnerWorkspace({
   onDelete: (kind: string, id: string, label: string) => void;
   onReview: (agreement: Agreement) => void;
   onProfileSaved: () => Promise<void>;
+  tenantShareLoadError: string;
   onSignOut: () => void;
 }) {
+  const [selectedAgreementYear, setSelectedAgreementYear] = useState<number | null>(null);
+  const [tenantShareUrls, setTenantShareUrls] = useState<Record<string, string | null>>({});
+  const [tenantShareBusy, setTenantShareBusy] = useState<string | null>(null);
+  const [tenantShareErrors, setTenantShareErrors] = useState<Record<string, string>>({});
   const assetById = useMemo(
     () => new Map(portfolio.assets.map((asset) => [asset.id, asset])),
     [portfolio.assets],
@@ -482,15 +551,112 @@ function OwnerWorkspace({
     [portfolio.tenants],
   );
   const pending = portfolio.agreements.filter(ownerNeedsReview);
+  const agreementYears = [...new Set(portfolio.agreements.map((agreement) =>
+    agreement.agreementYear ?? Number(agreement.startDate.slice(0, 4)),
+  ))].sort((first, second) => second - first);
+  const yearAgreements = selectedAgreementYear === null
+    ? []
+    : portfolio.agreements.filter((agreement) =>
+        (agreement.agreementYear ?? Number(agreement.startDate.slice(0, 4))) === selectedAgreementYear,
+      );
+
+  async function generateTenantShareLink(tenant: Tenant) {
+    setTenantShareBusy(tenant.id);
+    setTenantShareErrors((current) => ({ ...current, [tenant.id]: "" }));
+    try {
+      const response = await createTenantShareLink<{ token?: string }>(session, tenant.id);
+      if (!response.token) throw new Error("The server did not return a share link.");
+      const baseUrl = await readApiBaseUrl();
+      if (!baseUrl) throw new Error("Set the Rent-Sync server address before sharing.");
+      const url = new URL(`/share/tenant/${encodeURIComponent(response.token)}`, baseUrl).toString();
+      setTenantShareUrls((current) => ({ ...current, [tenant.id]: url }));
+      await onProfileSaved();
+    } catch (cause) {
+      setTenantShareErrors((current) => ({
+        ...current,
+        [tenant.id]: cause instanceof Error ? cause.message : "Unable to create a tenant share link.",
+      }));
+    } finally {
+      setTenantShareBusy(null);
+    }
+  }
+
+  async function disableTenantShareLink(tenant: Tenant) {
+    setTenantShareBusy(tenant.id);
+    setTenantShareErrors((current) => ({ ...current, [tenant.id]: "" }));
+    try {
+      await revokeTenantShareLink(session, tenant.id);
+      setTenantShareUrls((current) => ({ ...current, [tenant.id]: null }));
+      await onProfileSaved();
+    } catch (cause) {
+      setTenantShareErrors((current) => ({
+        ...current,
+        [tenant.id]: cause instanceof Error ? cause.message : "Unable to disable the tenant share link.",
+      }));
+    } finally {
+      setTenantShareBusy(null);
+    }
+  }
+
+  async function shareTenantPage(tenant: Tenant) {
+    const url = Object.hasOwn(tenantShareUrls, tenant.id)
+      ? tenantShareUrls[tenant.id]
+      : tenant.publicShareUrl ?? null;
+    if (!url) return;
+    try {
+      if (Platform.OS === "web" && typeof navigator !== "undefined") {
+        if (navigator.share) {
+          await navigator.share({ title: `${tenant.fullName} · Rent-Sync`, url });
+        } else if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(url);
+          Alert.alert("Link copied", "The public tenant page link was copied.");
+        } else {
+          Alert.alert("Public tenant page", url);
+        }
+      } else {
+        await Share.share({ title: `${tenant.fullName} · Rent-Sync`, message: url, url });
+      }
+    } catch (cause) {
+      setTenantShareErrors((current) => ({
+        ...current,
+        [tenant.id]: cause instanceof Error ? cause.message : "Unable to open the share sheet.",
+      }));
+    }
+  }
+
+  async function openTenantPage(tenant: Tenant) {
+    const url = Object.hasOwn(tenantShareUrls, tenant.id)
+      ? tenantShareUrls[tenant.id]
+      : tenant.publicShareUrl ?? null;
+    if (!url) return;
+    try {
+      await Linking.openURL(url);
+    } catch (cause) {
+      setTenantShareErrors((current) => ({
+        ...current,
+        [tenant.id]: cause instanceof Error ? cause.message : "Unable to open the tenant page.",
+      }));
+    }
+  }
 
   if (section === "Agreements") {
     return (
       <>
         <Heading
-          title="Agreements"
-          subtitle={`${portfolio.agreements.length} rental ${portfolio.agreements.length === 1 ? "agreement" : "agreements"}`}
+          title={selectedAgreementYear === null ? "Agreements" : `${selectedAgreementYear} agreements`}
+          subtitle={selectedAgreementYear === null
+            ? `${portfolio.agreements.length} rental ${portfolio.agreements.length === 1 ? "agreement" : "agreements"}`
+            : `${yearAgreements.length} ${yearAgreements.length === 1 ? "agreement" : "agreements"} in this year`}
+          right={selectedAgreementYear === null ? undefined : (
+            <ActionButton
+              label="All years"
+              variant="secondary"
+              compact
+              onPress={() => setSelectedAgreementYear(null)}
+            />
+          )}
         />
-        {pending.length ? (
+        {selectedAgreementYear === null && pending.length ? (
           <Panel style={styles.highlightPanel}>
             <View style={styles.inlineHeading}>
               <View style={styles.highlightIcon}><FileCheck2 size={18} color={colors.forest} /></View>
@@ -501,7 +667,31 @@ function OwnerWorkspace({
             </View>
           </Panel>
         ) : null}
-        {portfolio.agreements.length ? portfolio.agreements.map((agreement) => (
+        {selectedAgreementYear === null ? (
+          agreementYears.length ? agreementYears.map((year) => {
+            const count = portfolio.agreements.filter(
+              (agreement) => (agreement.agreementYear ?? Number(agreement.startDate.slice(0, 4))) === year,
+            ).length;
+            return (
+              <Pressable
+                key={year}
+                accessibilityRole="button"
+                onPress={() => setSelectedAgreementYear(year)}
+                style={({ pressed }) => [styles.yearFolder, pressed && styles.pressed]}
+              >
+                <View style={styles.yearFolderIcon}><Folder size={22} color={colors.forest} /></View>
+                <View style={styles.flexOne}>
+                  <Text style={styles.yearFolderLabel}>AGREEMENT YEAR</Text>
+                  <Text style={styles.yearFolderTitle}>{year}</Text>
+                </View>
+                <Text style={styles.yearFolderCount}>
+                  {count} {count === 1 ? "agreement" : "agreements"}
+                </Text>
+                <ChevronRight size={17} color={colors.leaf} />
+              </Pressable>
+            );
+          }) : <EmptyState title="No agreements yet" text="Add a tenant to prepare the first agreement." />
+        ) : yearAgreements.length ? yearAgreements.map((agreement) => (
           <AgreementCard
             key={agreement.id}
             agreement={agreement}
@@ -512,12 +702,54 @@ function OwnerWorkspace({
             onReview={() => onReview(agreement)}
             onDelete={() => onDelete("agreement", agreement.id, "this agreement")}
             onEdit={
-                agreement.status === "DRAFT" && !agreement.ownerApprovedAt && !agreement.tenantApprovedAt
+                agreement.status === "DRAFT"
                   ? () => onEdit({ kind: "agreement", item: agreement })
                   : undefined
             }
           />
-        )) : <EmptyState title="No agreements yet" text="Add a tenant to prepare the first agreement." />}
+        )) : <EmptyState title={`No agreements in ${selectedAgreementYear}`} text="Choose another year or return to all agreement years." />}
+      </>
+    );
+  }
+
+  if (section === "Terms") {
+    return (
+      <>
+        <Heading
+          title="Terms"
+          subtitle="Terms managed in the owner portal and mapped to your units"
+        />
+        {portfolio.termsTemplates?.length ? portfolio.termsTemplates.map((template) => {
+          const mappedAssets = portfolio.assets.filter(
+            (asset) => template.assetIds?.includes(asset.id) || asset.templateIds?.includes(template.id),
+          );
+          return (
+            <Panel key={template.id} style={styles.termsPanel}>
+              <Text style={styles.cardTitle}>{template.name}</Text>
+              {mappedAssets.length ? (
+                <Text style={styles.mutedSmall}>
+                  Mapped to: {mappedAssets.map((asset) => `${asset.name} · ${asset.unitNumber}`).join(", ")}
+                </Text>
+              ) : (
+                <Text style={styles.mutedSmall}>Not mapped to a unit.</Text>
+              )}
+              {template.items.length ? (
+                template.items.map((item, index) => (
+                  <Text key={item.id} style={styles.termItem}>
+                    {index + 1}. {item.importantObligation ? "Important obligation: " : ""}{item.text}
+                  </Text>
+                ))
+              ) : (
+                <Text style={styles.mutedSmall}>No terms in this heading yet.</Text>
+              )}
+            </Panel>
+          );
+        }) : (
+          <EmptyState
+            title="No terms to show"
+            text="Terms created in the web Terms module will appear here once your portfolio is refreshed."
+          />
+        )}
       </>
     );
   }
@@ -530,10 +762,14 @@ function OwnerWorkspace({
           subtitle={`${portfolio.tenants.length} ${portfolio.tenants.length === 1 ? "tenant" : "tenants"} in your properties`}
           right={<IconButton label="Add tenant" onPress={() => onCreate("tenant")} />}
         />
+        {tenantShareLoadError ? <Notice message={`Tenant share links could not be loaded: ${tenantShareLoadError}`} /> : null}
         {portfolio.tenants.length ? portfolio.tenants.map((tenant) => {
           const assignedAssets = (tenant.assetIds ?? [])
             .map((id) => assetById.get(id))
             .filter((asset): asset is Asset => Boolean(asset));
+          const shareUrl = Object.hasOwn(tenantShareUrls, tenant.id)
+            ? tenantShareUrls[tenant.id]
+            : tenant.publicShareUrl ?? null;
           return (
             <Panel key={tenant.id}>
               <View style={styles.personRow}>
@@ -551,7 +787,44 @@ function OwnerWorkspace({
               <View style={styles.recordActions}>
                 <RecordAction label="Edit tenant" icon={<Pencil size={14} color={colors.forest} />} onPress={() => onEdit({ kind: "tenant", item: tenant })} />
                 <RecordAction label="Delete tenant" danger icon={<Trash2 size={14} color={colors.danger} />} onPress={() => onDelete("tenant", tenant.id, tenant.fullName)} />
+                {shareUrl ? (
+                  <>
+                    <RecordAction
+                      label="Share page"
+                      icon={<Share2 size={14} color={colors.forest} />}
+                      onPress={() => void shareTenantPage(tenant)}
+                    />
+                    <RecordAction
+                      label="Open page"
+                      icon={<ArrowRight size={14} color={colors.forest} />}
+                      onPress={() => void openTenantPage(tenant)}
+                    />
+                    <RecordAction
+                      label={tenantShareBusy === tenant.id ? "Working..." : "Disable link"}
+                      danger
+                      icon={<X size={14} color={colors.danger} />}
+                      onPress={() => void disableTenantShareLink(tenant)}
+                    />
+                  </>
+                ) : (
+                  <RecordAction
+                    label={tenantShareBusy === tenant.id ? "Working..." : tenant.publicShareEnabled ? "Regenerate link" : "Create share link"}
+                    icon={<Share2 size={14} color={colors.forest} />}
+                    onPress={() => void generateTenantShareLink(tenant)}
+                  />
+                )}
               </View>
+              {shareUrl ? (
+                <View style={styles.tenantShareLink}>
+                  <Text style={styles.tenantShareLabel}>Public tenant page</Text>
+                  <Text selectable style={styles.tenantShareUrl}>{shareUrl}</Text>
+                </View>
+              ) : tenant.publicShareEnabled ? (
+                <Text style={styles.formHint}>
+                  Link is active but cannot be recovered. Regenerate it to display and share the new link.
+                </Text>
+              ) : null}
+              {tenantShareErrors[tenant.id] ? <Notice message={tenantShareErrors[tenant.id]} /> : null}
             </Panel>
           );
         }) : <EmptyState title="No tenants yet" text="Add a tenant to connect them with a home and agreement." />}
@@ -684,31 +957,70 @@ function OwnerWorkspace({
 function TenantWorkspace({
   section,
   portal,
-  onReview,
 }: {
   section: string;
   portal: TenantPortal;
-  onReview: (agreement: Agreement) => void;
 }) {
+  const [selectedAgreementYear, setSelectedAgreementYear] = useState<number | null>(null);
   const assetById = useMemo(
     () => new Map(portal.assets.map((asset) => [asset.id, asset])),
     [portal.assets],
   );
-  const pending = portal.agreements.filter(tenantNeedsReview);
-
+  const agreementYears = [...new Set(portal.agreements.map((agreement) =>
+    agreement.agreementYear ?? Number(agreement.startDate.slice(0, 4)),
+  ))].sort((first, second) => second - first);
+  const yearAgreements = selectedAgreementYear === null
+    ? []
+    : portal.agreements.filter((agreement) =>
+        (agreement.agreementYear ?? Number(agreement.startDate.slice(0, 4))) === selectedAgreementYear,
+      );
   if (section === "Agreements") {
     return (
       <>
-        <Heading title="My agreements" subtitle={`${portal.agreements.length} records`} />
-        {portal.agreements.length ? portal.agreements.map((agreement) => (
+        <Heading
+          title={selectedAgreementYear === null ? "My agreements" : `${selectedAgreementYear} agreements`}
+          subtitle={selectedAgreementYear === null ? `${portal.agreements.length} records` : `${yearAgreements.length} records`}
+          right={selectedAgreementYear === null ? undefined : (
+            <ActionButton
+              label="All years"
+              variant="secondary"
+              compact
+              onPress={() => setSelectedAgreementYear(null)}
+            />
+          )}
+        />
+        {selectedAgreementYear === null ? (
+          agreementYears.length ? agreementYears.map((year) => {
+            const count = portal.agreements.filter(
+              (agreement) => (agreement.agreementYear ?? Number(agreement.startDate.slice(0, 4))) === year,
+            ).length;
+            return (
+              <Pressable
+                key={year}
+                accessibilityRole="button"
+                onPress={() => setSelectedAgreementYear(year)}
+                style={({ pressed }) => [styles.yearFolder, pressed && styles.pressed]}
+              >
+                <View style={styles.yearFolderIcon}><Folder size={22} color={colors.forest} /></View>
+                <View style={styles.flexOne}>
+                  <Text style={styles.yearFolderLabel}>AGREEMENT YEAR</Text>
+                  <Text style={styles.yearFolderTitle}>{year}</Text>
+                </View>
+                <Text style={styles.yearFolderCount}>
+                  {count} {count === 1 ? "agreement" : "agreements"}
+                </Text>
+                <ChevronRight size={17} color={colors.leaf} />
+              </Pressable>
+            );
+          }) : <EmptyState title="No agreements yet" text="Your rental agreements will appear here when your property owner adds you." />
+        ) : yearAgreements.length ? yearAgreements.map((agreement) => (
           <AgreementCard
             key={agreement.id}
             agreement={agreement}
             asset={assetById.get(agreement.assetId ?? "")}
             role="TENANT"
-            onReview={() => onReview(agreement)}
           />
-        )) : <EmptyState title="No agreements yet" text="Your rental agreements will appear here when your property owner adds you." />}
+        )) : <EmptyState title={`No agreements in ${selectedAgreementYear}`} text="Choose another year or return to all agreement years." />}
       </>
     );
   }
@@ -720,18 +1032,6 @@ function TenantWorkspace({
   return (
     <>
       <Heading title={`Welcome, ${portal.tenant.fullName.split(" ")[0]}`} subtitle="Your rental home" />
-      {pending.length ? (
-        <Pressable onPress={() => onReview(pending[0])}>
-          <Panel style={styles.reviewCallout}>
-            <View style={styles.highlightIcon}><FileCheck2 size={18} color={colors.forest} /></View>
-            <View style={styles.flexOne}>
-              <Text style={styles.cardTitle}>Agreement needs your approval</Text>
-              <Text style={styles.mutedSmall}>Review the details before confirming.</Text>
-            </View>
-            <ChevronRight size={18} color={colors.forest} />
-          </Panel>
-        </Pressable>
-      ) : null}
       {currentAsset ? (
         <Panel style={styles.tenantHomeCard}>
           <View style={styles.tenantHomeTop}>
@@ -758,14 +1058,13 @@ function TenantWorkspace({
       ) : (
         <Panel><EmptyState title="Your home will show here" text="A property owner can link your account to a unit and agreement." /></Panel>
       )}
-      <Heading title="Agreement status" subtitle="Approval is recorded for both parties" />
+      <Heading title="Agreement status" subtitle="Approval is recorded by the property owner" />
       {portal.agreements.length ? portal.agreements.slice(0, 3).map((agreement) => (
         <AgreementCard
           key={agreement.id}
           agreement={agreement}
           asset={assetById.get(agreement.assetId ?? "")}
           role="TENANT"
-          onReview={() => onReview(agreement)}
         />
       )) : null}
     </>
@@ -905,13 +1204,13 @@ function AgreementCard({
   tenant?: Tenant;
   role: "OWNER" | "TENANT";
   session?: MobileSession;
-  onReview: () => void;
+  onReview?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
 }) {
   const [sharing, setSharing] = useState(false);
   const [shareError, setShareError] = useState("");
-  const needsReview = role === "OWNER" ? ownerNeedsReview(agreement) : tenantNeedsReview(agreement);
+  const needsReview = role === "OWNER" && ownerNeedsReview(agreement);
   const state = getAgreementState(agreement);
   async function sharePdf() {
     if (!session) return;
@@ -942,9 +1241,8 @@ function AgreementCard({
       </View>
       <Divider />
       <ApprovalLine role="Owner" time={agreement.ownerApprovedAt} />
-      <ApprovalLine role="Tenant" time={agreement.tenantApprovedAt} />
       {shareError ? <Notice message={shareError} /> : null}
-      {needsReview ? (
+      {needsReview && onReview ? (
         <ActionButton
           label="Review agreement"
           onPress={onReview}
@@ -985,7 +1283,7 @@ function AgreementCard({
 }
 
 function StatePill({ state }: { state: string }) {
-  const positive = state === "Active" || state === "Approved";
+  const positive = state === "Active" || state === "Approved" || state === "Owner approved";
   return (
     <View style={[styles.statePill, positive ? styles.statePillPositive : styles.statePillPending]}>
       <Text style={[styles.stateText, positive ? styles.stateTextPositive : styles.stateTextPending]}>{state}</Text>
@@ -1084,6 +1382,9 @@ function initialEditFields(selection: EditableItem): Record<string, string> {
         unitNumber: selection.item.unitNumber,
         monthlyRent: String(selection.item.monthlyRent),
         securityDeposit: String(selection.item.securityDeposit),
+        agreementDurationUnit: selection.item.agreementDurationUnit ?? DEFAULT_AGREEMENT_DURATION_UNIT,
+        agreementDurationValue: String(selection.item.agreementDurationValue ?? DEFAULT_AGREEMENT_DURATION_VALUE),
+        agreementStartDate: dateOnly(selection.item.agreementStartDate) || localToday(),
       };
     case "tenant":
       return {
@@ -1120,7 +1421,14 @@ function CreateSheet({
   onCreated: () => void;
 }) {
   const [fields, setFields] = useState<Record<string, string>>(() =>
-    item ? initialEditFields(item) : { startDate: localToday() },
+    item
+      ? initialEditFields(item)
+      : {
+          startDate: localToday(),
+          agreementDurationUnit: DEFAULT_AGREEMENT_DURATION_UNIT,
+          agreementDurationValue: String(DEFAULT_AGREEMENT_DURATION_VALUE),
+          agreementStartDate: localToday(),
+        },
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1156,6 +1464,9 @@ function CreateSheet({
           unitNumber: fields.unitNumber ?? "",
           monthlyRent: Number(fields.monthlyRent),
           securityDeposit: Number(fields.securityDeposit || 0),
+          agreementDurationUnit: fields.agreementDurationUnit ?? DEFAULT_AGREEMENT_DURATION_UNIT,
+          agreementDurationValue: Number(fields.agreementDurationValue),
+          agreementStartDate: fields.agreementStartDate ?? "",
         };
       } else if (kind === "agreement") {
         body = {
@@ -1262,15 +1573,54 @@ function CreateSheet({
                   <Field label="Monthly rent (₹)" value={fields.monthlyRent ?? ""} onChangeText={(value) => set("monthlyRent", value.replace(/\D/g, ""))} keyboardType="number-pad" style={styles.halfField} />
                   <Field label="Deposit (₹)" value={fields.securityDeposit ?? ""} onChangeText={(value) => set("securityDeposit", value.replace(/\D/g, ""))} keyboardType="number-pad" style={styles.halfField} />
                 </View>
+                <Text style={styles.fieldLabel}>Agreement duration</Text>
+                <View style={styles.formRow}>
+                  <Choice
+                    value="MONTH"
+                    label="Months"
+                    selected={fields.agreementDurationUnit !== "YEAR"}
+                    onPress={(value) => set("agreementDurationUnit", value)}
+                  />
+                  <Choice
+                    value="YEAR"
+                    label="Years"
+                    selected={fields.agreementDurationUnit === "YEAR"}
+                    onPress={(value) => set("agreementDurationUnit", value)}
+                  />
+                  <Field
+                    label={`Number of ${fields.agreementDurationUnit === "YEAR" ? "years" : "months"}`}
+                    value={fields.agreementDurationValue ?? ""}
+                    onChangeText={(value) => set("agreementDurationValue", value.replace(/\D/g, ""))}
+                    keyboardType="number-pad"
+                    style={styles.halfField}
+                  />
+                </View>
+                <Field
+                  label="Agreement start date"
+                  value={fields.agreementStartDate ?? ""}
+                  onChangeText={(value) => set("agreementStartDate", value)}
+                  placeholder="YYYY-MM-DD"
+                />
+                <Text style={styles.formHint}>
+                  Agreements for this unit use the selected duration and start date.
+                </Text>
               </>
             ) : null}
             {kind === "tenant" ? (
               <>
-                {!item ? <SelectField label="Rental unit" options={availableAssets.map((asset) => ({ id: asset.id, label: `${asset.name} · ${asset.unitNumber}` }))} value={fields.assetId ?? ""} onChange={(value) => set("assetId", value)} /> : null}
+                {!item ? <SelectField label="Rental unit" options={availableAssets.map((asset) => ({ id: asset.id, label: `${asset.name} · ${asset.unitNumber}` }))} value={fields.assetId ?? ""} onChange={(value) => {
+                  set("assetId", value);
+                  const asset = availableAssets.find((entry) => entry.id === value);
+                  set("startDate", dateOnly(asset?.agreementStartDate) || localToday());
+                }} /> : null}
                 <Field label="Tenant name" value={fields.fullName ?? ""} onChangeText={(value) => set("fullName", value)} autoCapitalize="words" />
                 <Field label="Mobile number (optional)" value={fields.mobileNumber ?? ""} onChangeText={(value) => set("mobileNumber", value)} keyboardType="phone-pad" maxLength={15} />
                 {!item ? <Field label="Agreement start date" value={fields.startDate ?? ""} onChangeText={(value) => set("startDate", value)} placeholder="YYYY-MM-DD" /> : null}
-                {!item ? <Text style={styles.formHint}>An 11-month draft agreement will be created with this tenant.</Text> : null}
+                {!item ? (
+                  <Text style={styles.formHint}>
+                    The draft agreement will use the selected unit&apos;s configured duration.
+                  </Text>
+                ) : null}
               </>
             ) : null}
             {kind === "agreement" ? (
@@ -1361,33 +1711,60 @@ function ReviewSheet({
   onClose: () => void;
   onApproved: () => void;
 }) {
+  const insets = useSafeAreaInsets();
   const [step, setStep] = useState(0);
-  const [values, setValues] = useState<ReviewValues>(() => ({
-    startDate: dateOnly(agreement?.startDate),
-    endDate: dateOnly(agreement?.endDate),
-    monthlyRent: agreement ? String(agreement.monthlyRent) : "",
-    securityDeposit: agreement ? String(agreement.securityDeposit) : "",
-    terms: agreement?.terms ?? "",
-    importantTerms: agreement?.importantTerms ?? "",
-  }));
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
   const assetId = agreement?.assetId;
   const tenantId = agreement?.tenantId;
   const asset = agreement
     ? portfolio?.assets.find((item) => item.id === assetId)
       ?? portal?.assets.find((item) => item.id === assetId)
     : undefined;
+  const durationUnit: AgreementDurationUnit =
+    asset?.agreementDurationUnit === "YEAR" ? "YEAR" : "MONTH";
+  const durationValue = asset?.agreementDurationValue ?? DEFAULT_AGREEMENT_DURATION_VALUE;
+  const [values, setValues] = useState<ReviewValues>(() => {
+    const startDate = dateOnly(agreement?.startDate);
+    return {
+      startDate,
+      endDate: addAgreementDuration(startDate, durationUnit, durationValue) ?? "",
+      monthlyRent: agreement ? String(agreement.monthlyRent) : "",
+      securityDeposit: agreement ? String(agreement.securityDeposit) : "",
+    };
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const calculatedEndDate = addAgreementDuration(
+    values.startDate,
+    durationUnit,
+    durationValue,
+  );
   const tenant = agreement
     ? portfolio?.tenants.find((item) => item.id === tenantId)
       ?? portal?.tenant
     : undefined;
-  const steps = ["KYC", "Rent", "Advance", "Terms", "Important", "Approve"];
-  const roleLabel = session.role === "OWNER" ? "owner" : "tenant";
+  const steps = ["KYC", "Rent", "Advance", "Terms", "Approve"];
+  const mappedTerms = agreement?.templateTerms?.length
+    ? agreement.templateTerms
+    : asset?.termTemplates?.map((template) => ({
+        templateId: template.id,
+        heading: template.name,
+        items: template.items,
+      })) ?? portfolio?.termsTemplates
+        ?.filter((template) => asset?.templateIds?.includes(template.id))
+        .map((template) => ({
+          templateId: template.id,
+          heading: template.name,
+          items: template.items,
+        })) ?? [];
 
   function update(key: keyof ReviewValues, value: string) {
-    setValues((current) => ({ ...current, [key]: value }));
+    setValues((current) => ({
+      ...current,
+      [key]: value,
+      ...(key === "startDate"
+        ? { endDate: addAgreementDuration(value, durationUnit, durationValue) ?? "" }
+        : {}),
+    }));
   }
 
   async function approve() {
@@ -1397,11 +1774,9 @@ function ReviewSheet({
     try {
       await approveAgreement(session, agreement.id, {
         startDate: values.startDate,
-        endDate: values.endDate,
+        endDate: calculatedEndDate ?? "",
         monthlyRent: Number(values.monthlyRent),
         securityDeposit: Number(values.securityDeposit),
-        terms: values.terms,
-        importantTerms: values.importantTerms,
       });
       onApproved();
     } catch (cause) {
@@ -1415,12 +1790,11 @@ function ReviewSheet({
     <Modal visible={Boolean(agreement)} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.modalRoot}>
         <Pressable accessibilityLabel="Close" style={styles.modalShade} onPress={onClose} />
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, styles.reviewSheet, { paddingBottom: Math.max(insets.bottom, 12) + 12 }]}>
           <View style={styles.sheetHandle} />
           <View style={styles.sheetHeading}>
             <View>
               <Text style={styles.sheetTitle}>Review agreement</Text>
-              <Text style={styles.mutedSmall}>{agreement?.agreementNumber}</Text>
             </View>
             <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} style={styles.closeButton}>
               <X size={19} color={colors.ink} />
@@ -1455,15 +1829,23 @@ function ReviewSheet({
                 <Text style={styles.cardTitle}>People and home</Text>
                 <Fact label="Tenant" value={tenant?.fullName ?? "Tenant account"} />
                 <Fact label="Mobile" value={tenant?.mobileNumber ?? "Not provided"} />
-                <Fact label="Property" value={asset?.buildingName ?? asset?.name ?? "Rental property"} />
-                <Fact label="Unit" value={asset?.unitNumber ?? "—"} />
-                <Fact label="Agreement" value={agreement?.agreementNumber ?? ""} />
+                <Fact label="Ward No." value={asset?.ward || "Not recorded"} />
+                <Fact label="Room No." value={asset?.roomNumber || "Not recorded"} />
               </Panel>
             ) : null}
             {step === 1 ? (
               <>
                 <Field label="Start date" value={values.startDate} onChangeText={(value) => update("startDate", value)} placeholder="YYYY-MM-DD" />
-                <Field label="End date" value={values.endDate} onChangeText={(value) => update("endDate", value)} placeholder="YYYY-MM-DD" />
+                <Field
+                  label="End date (calculated)"
+                  value={calculatedEndDate ?? ""}
+                  editable={false}
+                  placeholder="Set a valid start date"
+                />
+                <Text style={styles.formHint}>
+                  Calculated from the unit&apos;s {durationValue} {durationUnit.toLowerCase()}
+                  {durationValue === 1 ? "" : "s"} agreement duration.
+                </Text>
                 <Field label="Monthly rent (₹)" value={values.monthlyRent} onChangeText={(value) => update("monthlyRent", value.replace(/\D/g, ""))} keyboardType="number-pad" />
               </>
             ) : null}
@@ -1471,21 +1853,49 @@ function ReviewSheet({
               <Field label="Security deposit (₹)" value={values.securityDeposit} onChangeText={(value) => update("securityDeposit", value.replace(/\D/g, ""))} keyboardType="number-pad" />
             ) : null}
             {step === 3 ? (
-              <Field label="Agreement terms" value={values.terms} onChangeText={(value) => update("terms", value)} multiline numberOfLines={5} maxLength={2000} style={styles.multilineField} />
+              <Panel style={styles.reviewInfo}>
+                <Text style={styles.cardTitle}>Terms from the Terms module</Text>
+                {mappedTerms.length ? (
+                  mappedTerms.map((template) => (
+                    <View key={template.heading} style={styles.reviewTermGroup}>
+                      <Text style={styles.reviewTermHeading}>{template.heading}</Text>
+                      {template.items.map((item, index) => (
+                        <Text key={item.id} style={styles.mutedSmall}>
+                          {index + 1}. {item.importantObligation ? "Important obligation: " : ""}{item.text}
+                        </Text>
+                      ))}
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.mutedSmall}>No terms are mapped to this asset.</Text>
+                )}
+              </Panel>
             ) : null}
             {step === 4 ? (
-              <Field label="Important terms" value={values.importantTerms} onChangeText={(value) => update("importantTerms", value)} multiline numberOfLines={6} maxLength={4000} style={styles.multilineField} />
-            ) : null}
-            {step === 5 ? (
               <Panel style={styles.reviewInfo}>
-                <Text style={styles.cardTitle}>Confirm your approval</Text>
-                <Text style={styles.mutedSmall}>Your approval will be recorded with the current date and time. The other party must approve before the agreement becomes active.</Text>
+                <Text style={styles.cardTitle}>Confirm owner approval</Text>
+                <Text style={styles.mutedSmall}>Your approval will activate this agreement.</Text>
                 <Divider />
                 <Fact label="Term" value={`${shortDate(values.startDate)} – ${shortDate(values.endDate)}`} />
                 <Fact label="Monthly rent" value={money(Number(values.monthlyRent))} />
                 <Fact label="Security deposit" value={money(Number(values.securityDeposit))} />
                 <ApprovalLine role="Owner" time={agreement?.ownerApprovedAt} />
-                <ApprovalLine role="Tenant" time={agreement?.tenantApprovedAt} />
+                <Divider />
+                <Text style={styles.cardTitle}>Terms from the Terms module</Text>
+                {mappedTerms.length ? (
+                  mappedTerms.map((template) => (
+                    <View key={template.heading} style={styles.reviewTermGroup}>
+                      <Text style={styles.reviewTermHeading}>{template.heading}</Text>
+                      {template.items.map((item, index) => (
+                        <Text key={item.id} style={styles.mutedSmall}>
+                          {index + 1}. {item.importantObligation ? "Important obligation: " : ""}{item.text}
+                        </Text>
+                      ))}
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.mutedSmall}>No terms are mapped to this asset.</Text>
+                )}
               </Panel>
             ) : null}
             {error ? <Notice message={error} /> : null}
@@ -1500,7 +1910,7 @@ function ReviewSheet({
               {step < steps.length - 1 ? (
                 <ActionButton label="Continue" onPress={() => setStep((current) => current + 1)} icon={<ChevronRight size={17} color={colors.white} />} />
               ) : (
-                <ActionButton label={`Approve as ${roleLabel}`} onPress={() => void approve()} busy={busy} icon={<Check size={16} color={colors.white} />} />
+                <ActionButton label="Approve" onPress={() => void approve()} busy={busy} icon={<Check size={16} color={colors.white} />} />
               )}
             </View>
           </View>
@@ -1663,9 +2073,20 @@ const styles = StyleSheet.create({
   tenantLeaseRight: { alignItems: "flex-end" },
   tenantRent: { color: colors.white, fontSize: 15, fontWeight: "700", marginTop: 4 },
   reviewInfo: { backgroundColor: "#F8FAF7" },
+  termsPanel: { gap: 10 },
+  termItem: { color: colors.ink, fontSize: 12, lineHeight: 18 },
+  tenantShareLink: { gap: 5, padding: 10, borderRadius: 11, backgroundColor: "#F6F9F6" },
+  tenantShareLabel: { color: colors.forest, fontSize: 10, fontWeight: "700" },
+  tenantShareUrl: { color: colors.muted, fontSize: 10, lineHeight: 16 },
+  yearFolder: { minHeight: 92, flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface },
+  yearFolderIcon: { width: 44, height: 44, alignItems: "center", justifyContent: "center", borderRadius: 14, backgroundColor: colors.mint },
+  yearFolderLabel: { color: colors.muted, fontSize: 9, fontWeight: "700", letterSpacing: 1 },
+  yearFolderTitle: { color: colors.forest, fontSize: 22, fontWeight: "800", marginTop: 3 },
+  yearFolderCount: { color: colors.forest, fontSize: 10, fontWeight: "700" },
   modalRoot: { flex: 1, justifyContent: "flex-end" },
   modalShade: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(12,27,20,0.44)" },
   sheet: { height: "92%", maxHeight: "92%", backgroundColor: colors.background, borderTopLeftRadius: 25, borderTopRightRadius: 25, paddingHorizontal: 18, paddingTop: 10, paddingBottom: 18, gap: 10 },
+  reviewSheet: { height: "94%", maxHeight: "94%" },
   sheetHandle: { alignSelf: "center", width: 38, height: 4, borderRadius: 99, backgroundColor: "#CDD5CD" },
   sheetHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   sheetTitle: { color: colors.ink, fontSize: 18, fontWeight: "800" },
@@ -1684,8 +2105,10 @@ const styles = StyleSheet.create({
   reviewStepTextActive: { color: colors.white },
   stepCounter: { color: colors.leaf, fontSize: 9, fontWeight: "800", letterSpacing: 0.8 },
   reviewContent: { flex: 1, minHeight: 0 },
-  reviewActions: { flexDirection: "row", flexShrink: 0, gap: 9, paddingTop: 2 },
-  reviewActionButton: { flex: 1 },
+  reviewActions: { flexDirection: "row", flexShrink: 0, gap: 9, paddingTop: 2, alignItems: "center" },
+  reviewActionButton: { flex: 1, minWidth: 0 },
+  reviewTermGroup: { gap: 6 },
+  reviewTermHeading: { color: colors.ink, fontSize: 12, fontWeight: "700" },
   multilineField: { minHeight: 140 },
   pressed: { opacity: 0.8 },
 });

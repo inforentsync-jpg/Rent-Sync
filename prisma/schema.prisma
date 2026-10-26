@@ -67,6 +67,9 @@ model Asset {
   unitNumber         String                      @db.VarChar(40)
   monthlyRent        Int
   securityDeposit    Int                         @default(0)
+  agreementDurationUnit  String                  @default("MONTH") @db.VarChar(10)
+  agreementDurationValue Int                    @default(11)
+  agreementStartDate DateTime?                   @db.Date
   externalBuildingId String?                     @db.VarChar(40)
   ward               String?                     @db.VarChar(20)
   roomNumber         String?                     @db.VarChar(40)
@@ -98,6 +101,7 @@ model Tenant {
   email             String?                     @db.VarChar(254)
   photoDataUrl      String?                     @db.Text
   publicShareTokenHash String?                   @unique
+  publicShareTokenEncrypted String?               @db.Text
   passwordHash      String?
   createdAt         DateTime                    @default(now())
   updatedAt         DateTime                    @updatedAt

@@ -5,9 +5,11 @@ import {
   reviewDevAgreement,
   type AgreementReviewInput,
 } from "@/lib/dev-store";
-import { getNextAgreementApprovals } from "@/lib/agreement-approval";
-import { hasValidElevenMonthTerm } from "@/lib/rental-agreement";
-import { getOwnerSession, getTenantSession } from "@/lib/session";
+import {
+  hasValidAgreementDurationTerm,
+  isAgreementDurationUnit,
+} from "@/lib/agreement-duration";
+import { getOwnerSession } from "@/lib/session";
 import { shouldUseDatabase } from "@/lib/storage-mode";
 
 class AgreementApprovalError extends Error {
@@ -22,21 +24,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function parseReviewInput(value: unknown): AgreementReviewInput | null {
   if (!isRecord(value)) return null;
-  const { startDate, endDate, monthlyRent, securityDeposit, terms, importantTerms } = value;
+  const { startDate, endDate, monthlyRent, securityDeposit } = value;
   if (
     typeof startDate !== "string" ||
     typeof endDate !== "string" ||
-    !hasValidElevenMonthTerm(startDate, endDate) ||
     typeof monthlyRent !== "number" ||
     !Number.isSafeInteger(monthlyRent) ||
     monthlyRent <= 0 ||
     typeof securityDeposit !== "number" ||
     !Number.isSafeInteger(securityDeposit) ||
-    securityDeposit < 0 ||
-    typeof terms !== "string" ||
-    terms.trim().length > 2000 ||
-    typeof importantTerms !== "string" ||
-    importantTerms.trim().length > 4000
+    securityDeposit < 0
   ) {
     return null;
   }
@@ -45,8 +42,6 @@ function parseReviewInput(value: unknown): AgreementReviewInput | null {
     endDate,
     monthlyRent,
     securityDeposit,
-    terms: terms.trim(),
-    importantTerms: importantTerms.trim(),
   };
 }
 
@@ -55,14 +50,12 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const ownerSession = await getOwnerSession();
-  const tenantSession = await getTenantSession();
-  if (!ownerSession && !tenantSession) {
-    return NextResponse.json({ error: "Agreement owner or tenant sign-in is required." }, { status: 401 });
+  if (!ownerSession) {
+    return NextResponse.json({ error: "Only the property owner can approve this agreement." }, { status: 403 });
   }
-  const role = ownerSession ? "OWNER" : "TENANT";
-  const mobileNumber = ownerSession?.mobileNumber ?? tenantSession?.mobileNumber;
+  const mobileNumber = ownerSession.mobileNumber;
   if (!mobileNumber) {
-    return NextResponse.json({ error: "Agreement owner or tenant sign-in is required." }, { status: 401 });
+    return NextResponse.json({ error: "Owner sign-in is required." }, { status: 401 });
   }
 
   let body: unknown;
@@ -74,7 +67,7 @@ export async function PATCH(
   const input = parseReviewInput(body);
   if (!input) {
     return NextResponse.json(
-      { error: "Enter a valid 11-month agreement, rent, deposit, and terms before approving." },
+      { error: "Enter valid agreement dates, monthly rent, and security deposit before approving." },
       { status: 400 },
     );
   }
@@ -82,10 +75,10 @@ export async function PATCH(
 
   if (!shouldUseDatabase()) {
     try {
-      const agreement = await reviewDevAgreement(mobileNumber, role, id, input);
+      const agreement = await reviewDevAgreement(mobileNumber, id, input);
       if (!agreement) {
         return NextResponse.json(
-          { error: "This agreement is not available for your approval, or it has already been approved by you." },
+          { error: "This agreement is not available for owner approval." },
           { status: 409 },
         );
       }
@@ -105,9 +98,10 @@ export async function PATCH(
         const current = await transaction.rentalAgreement.findUnique({
           where: { id },
           include: {
-            tenant: { select: { mobileNumber: true } },
             asset: {
               select: {
+                agreementDurationUnit: true,
+                agreementDurationValue: true,
                 building: {
                   select: {
                     ownerId: true,
@@ -123,29 +117,34 @@ export async function PATCH(
           throw new AgreementApprovalError("Only draft agreements can be approved.", 409);
         }
 
-        if (role === "OWNER") {
-          const owner = await transaction.propertyOwner.findUnique({
-            where: { mobileNumber },
-            select: { id: true },
-          });
-          const propertyOwnerId =
-            current.asset.building.company?.ownerId ?? current.asset.building.ownerId;
-          if (!owner || owner.id !== propertyOwnerId) {
-            throw new AgreementApprovalError("This agreement is not assigned to your owner account.", 404);
-          }
-          if (current.ownerApprovedAt) {
-            throw new AgreementApprovalError("You have already approved this agreement.", 409);
-          }
-        } else {
-          if (current.tenant.mobileNumber !== mobileNumber) {
-            throw new AgreementApprovalError("This agreement is not assigned to your tenant account.", 404);
-          }
-          if (!current.ownerApprovedAt) {
-            throw new AgreementApprovalError("The owner must approve this agreement before you.", 409);
-          }
-          if (current.tenantApprovedAt) {
-            throw new AgreementApprovalError("You have already approved this agreement.", 409);
-          }
+        const owner = await transaction.propertyOwner.findUnique({
+          where: { mobileNumber },
+          select: { id: true },
+        });
+        const propertyOwnerId =
+          current.asset.building.company?.ownerId ?? current.asset.building.ownerId;
+        if (!owner || owner.id !== propertyOwnerId) {
+          throw new AgreementApprovalError("This agreement is not assigned to your owner account.", 404);
+        }
+
+        if (!isAgreementDurationUnit(current.asset.agreementDurationUnit)) {
+          throw new AgreementApprovalError(
+            "This asset has an invalid agreement duration setting. Update it before approving.",
+            500,
+          );
+        }
+        if (
+          !hasValidAgreementDurationTerm(
+            input.startDate,
+            input.endDate,
+            current.asset.agreementDurationUnit,
+            current.asset.agreementDurationValue,
+          )
+        ) {
+          throw new AgreementApprovalError(
+            "The agreement end date must match the duration configured for this asset.",
+            400,
+          );
         }
 
         const startsAt = new Date(`${input.startDate}T00:00:00.000Z`);
@@ -176,18 +175,6 @@ export async function PATCH(
           throw new AgreementApprovalError("This asset already has an active agreement for those dates.", 409);
         }
 
-        const hasChanges =
-          current.startDate.toISOString().slice(0, 10) !== input.startDate ||
-          current.endDate.toISOString().slice(0, 10) !== input.endDate ||
-          current.monthlyRent !== input.monthlyRent ||
-          current.securityDeposit !== input.securityDeposit ||
-          current.terms !== input.terms ||
-          current.importantTerms !== input.importantTerms;
-        const { ownerApprovedAt, tenantApprovedAt } = getNextAgreementApprovals(
-          current,
-          role,
-          hasChanges,
-        );
         return transaction.rentalAgreement.update({
           where: { id },
           data: {
@@ -196,11 +183,8 @@ export async function PATCH(
             agreementYear: Number(input.startDate.slice(0, 4)),
             monthlyRent: input.monthlyRent,
             securityDeposit: input.securityDeposit,
-            terms: input.terms,
-            importantTerms: input.importantTerms,
-            ownerApprovedAt,
-            tenantApprovedAt,
-            status: ownerApprovedAt && tenantApprovedAt ? "ACTIVE" : "DRAFT",
+            ownerApprovedAt: new Date(),
+            status: "ACTIVE",
           },
         });
       },

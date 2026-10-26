@@ -1,4 +1,10 @@
 import { addElevenMonthTerm } from "@/lib/rental-agreement";
+import {
+  addAgreementDuration,
+  DEFAULT_AGREEMENT_DURATION_UNIT,
+  DEFAULT_AGREEMENT_DURATION_VALUE,
+  type AgreementDurationUnit,
+} from "@/lib/agreement-duration";
 
 function parseIsoDate(value: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -22,6 +28,8 @@ export function getRenewalAgreementTerm(
   previousStartDate: string,
   previousEndDate: string,
   now = new Date(),
+  durationUnit: AgreementDurationUnit = DEFAULT_AGREEMENT_DURATION_UNIT,
+  durationValue = DEFAULT_AGREEMENT_DURATION_VALUE,
 ) {
   const start = parseIsoDate(previousStartDate);
   const end = parseIsoDate(previousEndDate);
@@ -47,7 +55,10 @@ export function getRenewalAgreementTerm(
     Date.UTC(nextStartYear, start.getUTCMonth(), Math.min(start.getUTCDate(), lastDayOfNextStartMonth)),
   );
   const nextStartDate = toIsoDate(nextStart);
-  const nextEndDate = addElevenMonthTerm(nextStartDate);
+  const nextEndDate =
+    durationUnit === "MONTH" && durationValue === DEFAULT_AGREEMENT_DURATION_VALUE
+      ? addElevenMonthTerm(nextStartDate)
+      : addAgreementDuration(nextStartDate, durationUnit, durationValue);
   if (!nextEndDate) {
     throw new Error(`Unable to calculate the agreement renewal term from ${previousStartDate}.`);
   }

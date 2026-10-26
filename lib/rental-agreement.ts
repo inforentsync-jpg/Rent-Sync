@@ -32,7 +32,7 @@ export type AgreementStatus =
   | "Expired"
   | "Draft"
   | "Awaiting owner approval"
-  | "Awaiting tenant approval"
+  | "Owner approved"
   | "Approved";
 
 export function getAgreementStatus(endDate: string, today = new Date()): AgreementStatus | null {
