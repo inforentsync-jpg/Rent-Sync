@@ -23,6 +23,7 @@ type AgreementPdfData = {
   unitNumber: string;
   assetType: string;
   ward: string | null;
+  templateTerms?: Array<{ heading: string; items: Array<{ position: number; text: string; importantObligation: boolean }> }>;
 };
 
 function wrapText(text: string, font: PDFFont, fontSize: number, maxWidth: number) {
@@ -154,6 +155,52 @@ export async function generateAgreementPdf(data: AgreementPdfData) {
     1,
   );
   drawField(page, `Agreement: ${data.agreementNumber}`, 307, 189, font, 225, 8, 1);
+
+  const termGroups = data.templateTerms?.filter((group) => group.items.length) ?? [];
+  if (termGroups.length) {
+    let termsPage = document.addPage();
+    let y = 750;
+    const margin = 52;
+    const fontSize = 11;
+    termsPage.drawText("PROPERTY TERMS", {
+      x: margin,
+      y,
+      font,
+      size: 16,
+      color: rgb(0.08, 0.24, 0.15),
+    });
+    y -= 34;
+
+    function drawLine(text: string, size = fontSize) {
+      for (const line of wrapText(text, font, size, 500)) {
+        if (y < margin) {
+          termsPage = document.addPage();
+          y = 750;
+        }
+        termsPage.drawText(line, {
+          x: margin,
+          y,
+          font,
+          size,
+          color: rgb(0.08, 0.12, 0.09),
+        });
+        y -= size + 5;
+      }
+    }
+
+    for (const group of termGroups) {
+      if (y < 90) {
+        termsPage = document.addPage();
+        y = 750;
+      }
+      drawLine(group.heading, 13);
+      group.items.forEach((item, index) => {
+        const marker = item.importantObligation ? "IMPORTANT OBLIGATION: " : "";
+        drawLine(`${item.position || index + 1}. ${marker}${item.text}`);
+      });
+      y -= 14;
+    }
+  }
 
   return document.save();
 }

@@ -42,7 +42,17 @@ export async function GET(
             },
             include: {
               tenant: true,
-              asset: { include: { building: true } },
+              asset: {
+                include: {
+                  building: true,
+                  termTemplates: {
+                    orderBy: { template: { name: "asc" } },
+                    include: {
+                      template: { include: { items: { orderBy: { position: "asc" } } } },
+                    },
+                  },
+                },
+              },
             },
           });
           return agreement ? { owner, ...agreement } : null;
@@ -61,6 +71,16 @@ export async function GET(
           ? record.building
           : null;
     const tenant = "tenant" in agreement ? agreement.tenant : record.tenant;
+    const templateTerms = "termTemplates" in asset
+      ? asset.termTemplates.map(({ template }) => ({
+          heading: template.name,
+          items: template.items.map(({ position, text, importantObligation }) => ({
+            position,
+            text,
+            importantObligation,
+          })),
+        }))
+      : [];
     if (!building) {
       return NextResponse.json({ error: "Agreement property was not found." }, { status: 404 });
     }
@@ -84,6 +104,7 @@ export async function GET(
       unitNumber: asset.unitNumber,
       assetType: asset.assetType,
       ward: asset.ward ?? null,
+      templateTerms,
     });
     const safeName = agreement.agreementNumber.replace(/[^A-Za-z0-9_-]/g, "");
     return new Response(Buffer.from(bytes), {

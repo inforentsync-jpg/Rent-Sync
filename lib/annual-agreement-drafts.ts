@@ -28,6 +28,9 @@ export async function generateAnnualAgreementDrafts(now = new Date()) {
           endDate: true,
         },
       },
+      renewalDismissals: {
+        select: { tenantId: true, agreementYear: true },
+      },
     },
   });
 
@@ -46,6 +49,15 @@ export async function generateAnnualAgreementDrafts(now = new Date()) {
         now,
       );
       if (!term || tenantAgreements.some((agreement) => agreement.agreementYear === term.year)) {
+        return [];
+      }
+      if (
+        asset.renewalDismissals.some(
+          (dismissal) =>
+            dismissal.tenantId === assignment.tenantId &&
+            dismissal.agreementYear === term.year,
+        )
+      ) {
         return [];
       }
       return [{

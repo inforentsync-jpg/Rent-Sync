@@ -44,12 +44,32 @@ export async function GET() {
     const tenant = await prisma.tenant.findUnique({
       where: { mobileNumber: session.mobileNumber },
       include: {
-        agreements: { orderBy: { createdAt: "desc" } },
+        agreements: {
+          orderBy: { createdAt: "desc" },
+          include: {
+            asset: {
+              include: {
+                termTemplates: {
+                  orderBy: { template: { name: "asc" } },
+                  include: {
+                    template: { include: { items: { orderBy: { position: "asc" } } } },
+                  },
+                },
+              },
+            },
+          },
+        },
         assets: {
           include: {
             asset: {
               include: {
                 building: { include: { company: true } },
+                termTemplates: {
+                  orderBy: { template: { name: "asc" } },
+                  include: {
+                    template: { include: { items: { orderBy: { position: "asc" } } } },
+                  },
+                },
                 agreements: {
                   where: { status: "ACTIVE" },
                   select: { startDate: true, endDate: true },
@@ -62,9 +82,22 @@ export async function GET() {
     });
     if (!tenant) return NextResponse.json({ error: "Tenant account was not found." }, { status: 404 });
     return NextResponse.json({
-      agreements: tenant.agreements,
+      agreements: tenant.agreements.map(({ asset, ...agreement }) => ({
+        ...agreement,
+        templateTerms: asset.termTemplates.map(({ template }) => ({
+          templateId: template.id,
+          heading: template.name,
+          items: template.items.map(({ id, position, text, importantObligation }) => ({
+            id,
+            position,
+            text,
+            importantObligation,
+          })),
+        })),
+      })),
       assets: tenant.assets.map(({ asset }) => ({
         ...asset,
+        termTemplates: asset.termTemplates.map(({ template }) => template),
         buildingName: asset.building.name,
         buildingAddress: asset.building.address,
         city: asset.building.city,

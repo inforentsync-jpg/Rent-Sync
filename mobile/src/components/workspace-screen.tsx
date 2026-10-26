@@ -58,6 +58,14 @@ import {
 import { clearSession, type MobileSession } from "@/lib/session";
 import { colors } from "@/theme";
 
+const deleteGuidance: Record<string, string> = {
+  agreement: "This permanently removes the agreement and its history, including approval records. Its tenant and property stay. Its agreement year will not be generated again.",
+  tenant: "Tenants with agreements cannot be deleted. Delete their agreements first only if you intend to permanently remove that history.",
+  asset: "Units with agreements or assigned tenants cannot be deleted. Delete their agreements only if you intend to permanently remove that history.",
+  building: "Delete this property's units first.",
+  company: "Move or delete this company's properties first.",
+};
+
 type Agreement = {
   id: string;
   agreementNumber: string;
@@ -275,11 +283,12 @@ export default function WorkspaceScreen({
         setError(cause instanceof Error ? cause.message : `Unable to delete ${label}.`);
       }
     };
+    const guidance = deleteGuidance[kind] ?? "Dependent records must be deleted first.";
     if (Platform.OS === "web") {
-      if (globalThis.confirm(`Delete ${label}? This action cannot be undone.`)) await remove();
+      if (globalThis.confirm(`Delete ${label}?\n\n${guidance}\n\nThis action cannot be undone.`)) await remove();
       return;
     }
-    Alert.alert(`Delete ${label}?`, "This action cannot be undone.", [
+    Alert.alert(`Delete ${label}?`, `${guidance}\n\nThis action cannot be undone.`, [
       { text: "Cancel", style: "cancel" },
       { text: "Delete", style: "destructive", onPress: () => void remove() },
     ]);
@@ -501,11 +510,7 @@ function OwnerWorkspace({
             role="OWNER"
             session={session}
             onReview={() => onReview(agreement)}
-            onDelete={
-              agreement.status === "DRAFT" && !agreement.ownerApprovedAt && !agreement.tenantApprovedAt
-                ? () => onDelete("agreement", agreement.id, "this draft agreement")
-                : undefined
-            }
+            onDelete={() => onDelete("agreement", agreement.id, "this agreement")}
             onEdit={
                 agreement.status === "DRAFT" && !agreement.ownerApprovedAt && !agreement.tenantApprovedAt
                   ? () => onEdit({ kind: "agreement", item: agreement })

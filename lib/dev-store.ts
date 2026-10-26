@@ -49,6 +49,9 @@ export type DevAsset = {
   securityDeposit: number;
   externalBuildingId?: string | null;
   ward?: string | null;
+  roomNumber?: string | null;
+  ksmartBuildingId?: string | null;
+  ksrbId?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -58,6 +61,12 @@ export type DevTenant = {
   ownerId: string;
   fullName: string;
   mobileNumber: string | null;
+  businessName?: string | null;
+  fullAddress?: string | null;
+  aadhaarNumber?: string | null;
+  fatherName?: string | null;
+  email?: string | null;
+  photoDataUrl?: string | null;
   passwordHash?: string | null;
   assetIds: string[];
   createdAt: string;
@@ -83,6 +92,21 @@ export type DevAgreement = {
   createdAt: string;
 };
 
+export type DevArchivedAgreement = DevAgreement & {
+  ownerId: string;
+  tenantName: string;
+  tenantMobileNumber: string | null;
+  assetName: string;
+  assetType: string;
+  unitNumber: string;
+  buildingName: string;
+  buildingAddress: string;
+  city: string;
+  state: string;
+  templateTerms: [];
+  archivedAt: string;
+};
+
 type DevStore = {
   owners: DevOwner[];
   buildings: DevBuilding[];
@@ -90,6 +114,8 @@ type DevStore = {
   assets: DevAsset[];
   tenants: DevTenant[];
   agreements: DevAgreement[];
+  archivedAgreements: DevArchivedAgreement[];
+  dismissedAgreementRenewals: string[];
 };
 
 type BuildingInput = Omit<DevBuilding, "id" | "ownerId" | "createdAt" | "updatedAt">;
@@ -135,6 +161,8 @@ async function readStore(): Promise<DevStore> {
       companies: existing.companies ?? [],
       assets: existing.assets ?? [],
       tenants: existing.tenants ?? [],
+      archivedAgreements: existing.archivedAgreements ?? [],
+      dismissedAgreementRenewals: existing.dismissedAgreementRenewals ?? [],
       agreements: rawAgreements.map((agreement) => {
         const legacySource = agreement.renewalOfId
           ? agreementsById.get(agreement.renewalOfId)
@@ -174,6 +202,8 @@ async function readStore(): Promise<DevStore> {
         assets: [],
         tenants: [],
         agreements: [],
+        archivedAgreements: [],
+        dismissedAgreementRenewals: [],
       };
     }
     throw error;
@@ -391,7 +421,8 @@ export function getDevOwnerPortfolio(mobileNumber: string) {
     const agreements = store.agreements.filter(
       (entry) => assetIds.has(entry.assetId) || tenantIds.has(entry.tenantId),
     );
-    return { owner, companies, buildings, assets, tenants, agreements };
+    const deletedAgreements = store.archivedAgreements.filter((entry) => entry.ownerId === owner.id);
+    return { owner, companies, buildings, assets, tenants, agreements, deletedAgreements };
   });
 }
 
@@ -555,6 +586,12 @@ export function updateDevPortfolioItem(
     }
     tenant.fullName = input.fullName ?? tenant.fullName;
     tenant.mobileNumber = mobileNumber;
+    tenant.businessName = input.businessName;
+    tenant.fullAddress = input.fullAddress;
+    tenant.aadhaarNumber = input.aadhaarNumber;
+    tenant.fatherName = input.fatherName;
+    tenant.email = input.email;
+    tenant.photoDataUrl = input.photoDataUrl;
     tenant.updatedAt = now;
     await writeStore(store);
     return tenant;
@@ -573,31 +610,49 @@ export function deleteDevPortfolioItem(
     if (kind === "company") {
       const company = store.companies.find((entry) => entry.id === id && entry.ownerId === owner.id);
       if (!company) throw new Error("Company not found in your account.");
-      if (store.buildings.some((entry) => entry.companyId === id)) {
-        throw new Error("Move or delete this company's properties before deleting the company.");
+      const buildingCount = store.buildings.filter((entry) => entry.companyId === id).length;
+      if (buildingCount) {
+        throw new DevPortfolioConflictError(
+          `This company has ${buildingCount} ${buildingCount === 1 ? "property" : "properties"}. Move or delete them before deleting the company.`,
+        );
       }
       store.companies = store.companies.filter((entry) => entry.id !== id);
     } else if (kind === "building") {
       const building = store.buildings.find((entry) => entry.id === id && entry.ownerId === owner.id);
       if (!building) throw new Error("Property not found in your account.");
-      if (store.assets.some((entry) => entry.buildingId === id)) {
-        throw new Error("Delete this property's units before deleting the property.");
+      const assetCount = store.assets.filter((entry) => entry.buildingId === id).length;
+      if (assetCount) {
+        throw new DevPortfolioConflictError(
+          `This property has ${assetCount} ${assetCount === 1 ? "unit" : "units"}. Delete its units before deleting the property.`,
+        );
       }
       store.buildings = store.buildings.filter((entry) => entry.id !== id);
     } else if (kind === "asset") {
       const asset = store.assets.find((entry) => entry.id === id);
       const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
       if (!asset || building?.ownerId !== owner.id) throw new Error("Unit not found in your account.");
-      if (store.agreements.some((entry) => entry.assetId === id)) {
-        throw new Error("This unit has agreement history and cannot be deleted.");
+      const agreementCount = store.agreements.filter((entry) => entry.assetId === id).length;
+      if (agreementCount) {
+        throw new DevPortfolioConflictError(
+          `This unit has ${agreementCount} agreement ${agreementCount === 1 ? "record" : "records"}. Archive all associated agreements first; their history remains available in Deleted agreements.`,
+        );
+      }
+      const assignedTenantCount = store.tenants.filter((entry) => entry.assetIds.includes(id)).length;
+      if (assignedTenantCount) {
+        throw new DevPortfolioConflictError(
+          `This unit has ${assignedTenantCount} assigned ${assignedTenantCount === 1 ? "tenant" : "tenants"}. Delete the assigned tenant records first, then delete the unit.`,
+        );
       }
       store.assets = store.assets.filter((entry) => entry.id !== id);
       for (const tenant of store.tenants) tenant.assetIds = tenant.assetIds.filter((assetId) => assetId !== id);
     } else if (kind === "tenant") {
       const tenant = store.tenants.find((entry) => entry.id === id && entry.ownerId === owner.id);
       if (!tenant) throw new Error("Tenant not found in your account.");
-      if (store.agreements.some((entry) => entry.tenantId === id)) {
-        throw new Error("This tenant has agreement history and cannot be deleted.");
+      const agreementCount = store.agreements.filter((entry) => entry.tenantId === id).length;
+      if (agreementCount) {
+        throw new DevPortfolioConflictError(
+          `This tenant has ${agreementCount} agreement ${agreementCount === 1 ? "record" : "records"} and was not deleted. Archive those agreements first; their history remains available in Deleted agreements.`,
+        );
       }
       store.tenants = store.tenants.filter((entry) => entry.id !== id);
     } else {
@@ -605,13 +660,27 @@ export function deleteDevPortfolioItem(
       const asset = store.assets.find((entry) => entry.id === agreement?.assetId);
       const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
       if (!agreement || building?.ownerId !== owner.id) throw new Error("Agreement not found in your account.");
-      if (
-        agreement.status !== "DRAFT" ||
-        agreement.ownerApprovedAt ||
-        agreement.tenantApprovedAt
-      ) {
-        throw new Error("Only unapproved draft agreements can be deleted.");
+      const renewalKey = `${agreement.assetId}:${agreement.tenantId}:${agreement.agreementYear}`;
+      if (!store.dismissedAgreementRenewals.includes(renewalKey)) {
+        store.dismissedAgreementRenewals.push(renewalKey);
       }
+      const tenant = store.tenants.find((entry) => entry.id === agreement.tenantId);
+      if (!tenant || !asset || !building) throw new Error("Agreement links could not be archived.");
+      store.archivedAgreements.unshift({
+        ...agreement,
+        ownerId: owner.id,
+        tenantName: tenant.fullName,
+        tenantMobileNumber: tenant.mobileNumber,
+        assetName: asset.name,
+        assetType: asset.assetType,
+        unitNumber: asset.unitNumber,
+        buildingName: building.name,
+        buildingAddress: building.address,
+        city: building.city,
+        state: building.state,
+        templateTerms: [],
+        archivedAt: new Date().toISOString(),
+      });
       store.agreements = store.agreements.filter((entry) => entry.id !== id);
     }
 
@@ -619,6 +688,119 @@ export function deleteDevPortfolioItem(
     return { success: true };
   });
 }
+
+export function deleteDevPortfolioItems(
+  ownerMobile: string,
+  kind: "company" | "building" | "asset" | "tenant" | "agreement",
+  ids: string[],
+) {
+  return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === ownerMobile);
+    if (!owner) throw new Error("Owner account was not found.");
+
+    const selectedIds = new Set(ids);
+    if (kind === "company") {
+      const records = store.companies.filter(
+        (entry) => selectedIds.has(entry.id) && entry.ownerId === owner.id,
+      );
+      if (records.length !== selectedIds.size) throw new Error("One or more companies were not found in your account.");
+      const blocked = records
+        .map((company) => store.buildings.filter((building) => building.companyId === company.id).length)
+        .find((count) => count > 0);
+      if (blocked) {
+        throw new DevPortfolioConflictError("Selected companies contain properties. Delete those properties first.");
+      }
+      store.companies = store.companies.filter((entry) => !selectedIds.has(entry.id));
+    } else if (kind === "building") {
+      const records = store.buildings.filter(
+        (entry) => selectedIds.has(entry.id) && entry.ownerId === owner.id,
+      );
+      if (records.length !== selectedIds.size) throw new Error("One or more properties were not found in your account.");
+      const blocked = records
+        .map((building) => store.assets.filter((asset) => asset.buildingId === building.id).length)
+        .find((count) => count > 0);
+      if (blocked) {
+        throw new DevPortfolioConflictError("Selected properties contain units. Delete those units first.");
+      }
+      store.buildings = store.buildings.filter((entry) => !selectedIds.has(entry.id));
+    } else if (kind === "asset") {
+      const records = store.assets.filter((asset) => {
+        const building = store.buildings.find((entry) => entry.id === asset.buildingId);
+        return selectedIds.has(asset.id) && building?.ownerId === owner.id;
+      });
+      if (records.length !== selectedIds.size) throw new Error("One or more units were not found in your account.");
+      if (records.some((asset) =>
+        store.agreements.some((agreement) => agreement.assetId === asset.id)
+      )) {
+        throw new DevPortfolioConflictError(
+          "Selected units include agreements. Archive all associated agreements first; their history remains available in Deleted agreements.",
+        );
+      }
+      if (records.some((asset) =>
+        store.tenants.some((tenant) => tenant.assetIds.includes(asset.id))
+      )) {
+        throw new DevPortfolioConflictError("Selected units have assigned tenants. Delete or reassign those tenants first.");
+      }
+      store.assets = store.assets.filter((entry) => !selectedIds.has(entry.id));
+      for (const tenant of store.tenants) {
+        tenant.assetIds = tenant.assetIds.filter((assetId) => !selectedIds.has(assetId));
+      }
+    } else if (kind === "tenant") {
+      const records = store.tenants.filter(
+        (entry) => selectedIds.has(entry.id) && entry.ownerId === owner.id,
+      );
+      if (records.length !== selectedIds.size) throw new Error("One or more tenants were not found in your account.");
+      if (records.some((tenant) =>
+        store.agreements.some((agreement) => agreement.tenantId === tenant.id)
+      )) {
+        throw new DevPortfolioConflictError(
+          "Selected tenants have agreements, so they were not deleted. Archive their agreements first; their history remains available in Deleted agreements.",
+        );
+      }
+      store.tenants = store.tenants.filter((entry) => !selectedIds.has(entry.id));
+    } else {
+      const records = store.agreements.filter((agreement) => {
+        const asset = store.assets.find((entry) => entry.id === agreement.assetId);
+        const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
+        return selectedIds.has(agreement.id) && building?.ownerId === owner.id;
+      });
+      if (records.length !== selectedIds.size) throw new Error("One or more agreements were not found in your account.");
+      for (const agreement of records) {
+        const renewalKey = `${agreement.assetId}:${agreement.tenantId}:${agreement.agreementYear}`;
+        if (!store.dismissedAgreementRenewals.includes(renewalKey)) {
+          store.dismissedAgreementRenewals.push(renewalKey);
+        }
+        const tenant = store.tenants.find((entry) => entry.id === agreement.tenantId);
+        const asset = store.assets.find((entry) => entry.id === agreement.assetId);
+        const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
+        if (!tenant || !asset || !building) {
+          throw new DevPortfolioConflictError("Agreement links could not be archived. No agreements were removed.");
+        }
+        store.archivedAgreements.unshift({
+          ...agreement,
+          ownerId: owner.id,
+          tenantName: tenant.fullName,
+          tenantMobileNumber: tenant.mobileNumber,
+          assetName: asset.name,
+          assetType: asset.assetType,
+          unitNumber: asset.unitNumber,
+          buildingName: building.name,
+          buildingAddress: building.address,
+          city: building.city,
+          state: building.state,
+          templateTerms: [],
+          archivedAt: new Date().toISOString(),
+        });
+      }
+      store.agreements = store.agreements.filter((entry) => !selectedIds.has(entry.id));
+    }
+
+    await writeStore(store);
+    return { success: true, deletedCount: selectedIds.size };
+  });
+}
+
+export class DevPortfolioConflictError extends Error {}
 
 export function updateDevDraftAgreement(
   ownerMobile: string,
@@ -667,23 +849,31 @@ export function updateDevDraftAgreement(
 
 export function createDevTenant(
   ownerMobile: string,
-  assetId: string,
+  assetId: string | null,
   fullName: string,
   mobileNumber: string | null,
-  startDate: string,
+  startDate: string | null,
+  kyc: {
+    businessName: string | null;
+    fullAddress: string | null;
+    aadhaarNumber: string | null;
+    fatherName: string | null;
+    email: string | null;
+    photoDataUrl: string | null;
+  },
 ) {
   return withStore(async (store) => {
     const owner = store.owners.find((entry) => entry.mobileNumber === ownerMobile);
-    const asset = store.assets.find((entry) => entry.id === assetId);
+    const asset = assetId ? store.assets.find((entry) => entry.id === assetId) : null;
     const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
-    if (!owner || !asset || !building || building.ownerId !== owner.id) {
+    if (!owner || (assetId && (!asset || !building || building.ownerId !== owner.id))) {
       throw new Error("Asset not found in your account.");
     }
-    if (store.tenants.some((entry) => entry.assetIds.includes(assetId))) {
+    if (assetId && store.tenants.some((entry) => entry.assetIds.includes(assetId))) {
       throw new DevAgreementConflictError("This unit is already assigned to a tenant.");
     }
-    const endDate = addElevenMonthTerm(startDate);
-    if (!endDate) throw new Error("Choose a valid agreement start date.");
+    const endDate = startDate ? addElevenMonthTerm(startDate) : null;
+    if (startDate && !endDate) throw new Error("Choose a valid agreement start date.");
     let tenant = mobileNumber
       ? store.tenants.find((entry) => entry.mobileNumber === mobileNumber)
       : store.tenants.find(
@@ -699,6 +889,7 @@ export function createDevTenant(
         ownerId: owner.id,
         fullName,
         mobileNumber,
+        ...kyc,
         assetIds: [],
         createdAt: now,
         updatedAt: now,
@@ -708,7 +899,13 @@ export function createDevTenant(
       throw new Error("This mobile number is already registered with a different owner.");
     } else {
       tenant.fullName = fullName;
+      tenant.mobileNumber = mobileNumber;
+      Object.assign(tenant, kyc);
       tenant.updatedAt = now;
+    }
+    if (!asset || !assetId || !startDate || !endDate) {
+      await writeStore(store);
+      return tenant;
     }
     const agreementYear = Number(startDate.slice(0, 4));
     if (
@@ -1023,6 +1220,8 @@ export function generateDevAnnualAgreementDrafts(mobileNumber: string, now = new
         ) {
           continue;
         }
+        const renewalKey = `${assetId}:${tenant.id}:${term.year}`;
+        if (store.dismissedAgreementRenewals.includes(renewalKey)) continue;
         store.agreements.unshift({
           id: randomUUID(),
           agreementNumber: `RS-${term.year}-${randomUUID().slice(0, 8).toUpperCase()}`,
