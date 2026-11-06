@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Check, ChevronLeft, ChevronRight, LoaderCircle, X } from "lucide-react";
 import { addAgreementDuration, type AgreementDurationUnit } from "@/lib/agreement-duration";
+import { formatPartyAddress, PARTY_ADDRESS_LIMITS, type PartyAddressFields } from "@/lib/party-address";
 
 export type ReviewableAgreement = {
   id: string;
@@ -25,11 +26,50 @@ export type ReviewableAgreement = {
     items: Array<{ id: string; position: number; text: string; importantObligation: boolean }>;
   }>;
   status: string;
+  agreementYear?: number;
   ownerApprovedAt?: string | null;
   tenantApprovedAt?: string | null;
+  mandatoryDetailsApprovedAt?: string | null;
 };
 
 type ReviewStep = "kyc" | "rent" | "expiry" | "advance" | "terms" | "important-terms" | "approve";
+type OwnerApprovalProfile = {
+  fullName: string;
+  mobileNumber: string;
+  aadhaarNumber?: string | null;
+  fullAddress?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  district?: string | null;
+  state?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+  fatherName?: string | null;
+};
+type TenantApprovalProfile = {
+  fullName: string;
+  mobileNumber: string | null;
+  businessName?: string | null;
+  businessNature?: string | null;
+  fullAddress?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  district?: string | null;
+  state?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+  aadhaarNumber?: string | null;
+};
+type PropertyApprovalDetails = {
+  address: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  panchayat?: string | null;
+  ward?: string | null;
+  roomNumber?: string | null;
+  unitNumber: string;
+};
 const steps: Array<{ id: ReviewStep; label: string }> = [
   { id: "kyc", label: "KYC" },
   { id: "rent", label: "Rent" },
@@ -48,6 +88,38 @@ function formatDateTime(value?: string | null) {
   });
 }
 
+function PartyAddressFieldsInput({
+  values,
+  onChange,
+}: {
+  values: PartyAddressFields;
+  onChange: (field: keyof PartyAddressFields, value: string) => void;
+}) {
+  const fields: Array<{ name: keyof PartyAddressFields; label: string; required: boolean }> = [
+    { name: "addressLine1", label: "Address line 1", required: true },
+    { name: "addressLine2", label: "Address line 2", required: false },
+    { name: "district", label: "District", required: true },
+    { name: "state", label: "State", required: true },
+    { name: "city", label: "City", required: true },
+    { name: "postalCode", label: "PIN code", required: true },
+  ];
+  return (
+    <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
+      {fields.map((field) => (
+        <ApprovalField
+          key={field.name}
+          label={field.label}
+          required={field.required}
+          value={values[field.name] ?? ""}
+          maxLength={PARTY_ADDRESS_LIMITS[field.name]}
+          inputMode={field.name === "postalCode" ? "numeric" : undefined}
+          onChange={(value) => onChange(field.name, value)}
+        />
+      ))}
+    </div>
+  );
+}
+
 export default function AgreementApprovalWizard({
   agreement,
   party,
@@ -55,6 +127,9 @@ export default function AgreementApprovalWizard({
   tenantName,
   tenantMobile,
   propertyName,
+  owner,
+  tenant,
+  property,
   wardNumber,
   roomNumber,
   onClose,
@@ -66,6 +141,9 @@ export default function AgreementApprovalWizard({
   tenantName: string;
   tenantMobile: string | null;
   propertyName: string;
+  owner?: OwnerApprovalProfile | null;
+  tenant?: TenantApprovalProfile | null;
+  property?: PropertyApprovalDetails | null;
   wardNumber?: string | null;
   roomNumber?: string | null;
   onClose: () => void;
@@ -73,9 +151,46 @@ export default function AgreementApprovalWizard({
 }) {
   const [stepIndex, setStepIndex] = useState(0);
   const [furthestStepIndex, setFurthestStepIndex] = useState(0);
-  const [startDate, setStartDate] = useState(agreement.startDate.slice(0, 10));
+  const [startDate, setStartDate] = useState(
+    agreement.startDate?.slice(0, 10) || `${agreement.agreementYear ?? new Date().getFullYear()}-01-01`,
+  );
   const [monthlyRent, setMonthlyRent] = useState(String(agreement.monthlyRent));
   const [securityDeposit, setSecurityDeposit] = useState(String(agreement.securityDeposit));
+  const [ownerDetails, setOwnerDetails] = useState({
+    fullName: owner?.fullName ?? "",
+    aadhaarNumber: owner?.aadhaarNumber ?? "",
+    fullAddress: owner?.fullAddress ?? "",
+    addressLine1: owner?.addressLine1 ?? "",
+    addressLine2: owner?.addressLine2 ?? "",
+    district: owner?.district ?? "",
+    state: owner?.state ?? "",
+    city: owner?.city ?? "",
+    postalCode: owner?.postalCode ?? "",
+    fatherName: owner?.fatherName ?? "",
+  });
+  const [tenantDetails, setTenantDetails] = useState({
+    fullName: tenant?.fullName ?? tenantName,
+    mobileNumber: tenant?.mobileNumber ?? tenantMobile ?? "",
+    businessName: tenant?.businessName ?? "",
+    businessNature: tenant?.businessNature ?? "",
+    fullAddress: tenant?.fullAddress ?? "",
+    addressLine1: tenant?.addressLine1 ?? "",
+    addressLine2: tenant?.addressLine2 ?? "",
+    district: tenant?.district ?? "",
+    state: tenant?.state ?? "",
+    city: tenant?.city ?? "",
+    postalCode: tenant?.postalCode ?? "",
+    aadhaarNumber: tenant?.aadhaarNumber ?? "",
+  });
+  const [propertyDetails, setPropertyDetails] = useState({
+    address: property?.address ?? "",
+    city: property?.city ?? "",
+    state: property?.state ?? "",
+    postalCode: property?.postalCode ?? "",
+    panchayat: property?.panchayat ?? "",
+    ward: property?.ward ?? wardNumber ?? "",
+    roomNumber: property?.roomNumber ?? roomNumber ?? property?.unitNumber ?? "",
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const durationUnit = agreement.agreementDurationUnit ?? "MONTH";
@@ -102,6 +217,44 @@ export default function AgreementApprovalWizard({
     if (readOnly) return;
     const rent = Number(monthlyRent);
     const deposit = Number(securityDeposit);
+    const mandatoryValues = [
+      ownerDetails.fullName,
+      ownerDetails.aadhaarNumber,
+      ownerDetails.addressLine1,
+      ownerDetails.district,
+      ownerDetails.state,
+      ownerDetails.city,
+      ownerDetails.postalCode,
+      ownerDetails.fatherName,
+      tenantDetails.fullName,
+      tenantDetails.mobileNumber,
+      tenantDetails.businessName,
+      tenantDetails.businessNature,
+      tenantDetails.addressLine1,
+      tenantDetails.district,
+      tenantDetails.state,
+      tenantDetails.city,
+      tenantDetails.postalCode,
+      tenantDetails.aadhaarNumber,
+      propertyDetails.address,
+      propertyDetails.city,
+      propertyDetails.state,
+      propertyDetails.postalCode,
+      propertyDetails.panchayat,
+      propertyDetails.ward,
+      propertyDetails.roomNumber,
+    ];
+    if (
+      mandatoryValues.some((value) => !value.trim()) ||
+      !/^\d{12}$/.test(ownerDetails.aadhaarNumber.trim()) ||
+      !/^\d{12}$/.test(tenantDetails.aadhaarNumber.trim()) ||
+      !/^\d{10,15}$/.test(tenantDetails.mobileNumber.replace(/\D/g, ""))
+    ) {
+      setStepIndex(0);
+      setFurthestStepIndex((furthest) => Math.max(furthest, 0));
+      setError("Complete every required owner, tenant, and property field in the KYC step. Aadhaar must be 12 digits and tenant mobile must be valid.");
+      return;
+    }
     if (!endDate || !Number.isSafeInteger(rent) || rent <= 0 || !Number.isSafeInteger(deposit) || deposit < 0) {
       setError(`Enter a valid ${durationValue}-${durationUnit.toLowerCase()} period, monthly rent, and security deposit.`);
       return;
@@ -117,6 +270,35 @@ export default function AgreementApprovalWizard({
           endDate,
           monthlyRent: rent,
           securityDeposit: deposit,
+          ownerFullName: ownerDetails.fullName,
+          ownerAadhaarNumber: ownerDetails.aadhaarNumber,
+          ownerFullAddress: formatPartyAddress(ownerDetails),
+          ownerAddressLine1: ownerDetails.addressLine1,
+          ownerAddressLine2: ownerDetails.addressLine2,
+          ownerDistrict: ownerDetails.district,
+          ownerState: ownerDetails.state,
+          ownerCity: ownerDetails.city,
+          ownerPostalCode: ownerDetails.postalCode,
+          ownerFatherName: ownerDetails.fatherName,
+          tenantFullName: tenantDetails.fullName,
+          tenantMobileNumber: tenantDetails.mobileNumber,
+          tenantBusinessName: tenantDetails.businessName,
+          tenantBusinessNature: tenantDetails.businessNature,
+          tenantFullAddress: formatPartyAddress(tenantDetails),
+          tenantAddressLine1: tenantDetails.addressLine1,
+          tenantAddressLine2: tenantDetails.addressLine2,
+          tenantDistrict: tenantDetails.district,
+          tenantState: tenantDetails.state,
+          tenantCity: tenantDetails.city,
+          tenantPostalCode: tenantDetails.postalCode,
+          tenantAadhaarNumber: tenantDetails.aadhaarNumber,
+          buildingAddress: propertyDetails.address,
+          buildingCity: propertyDetails.city,
+          buildingState: propertyDetails.state,
+          buildingPostalCode: propertyDetails.postalCode,
+          buildingPanchayat: propertyDetails.panchayat,
+          assetWard: propertyDetails.ward,
+          assetRoomNumber: propertyDetails.roomNumber,
         }),
       });
       const payload = await response.json();
@@ -143,7 +325,7 @@ export default function AgreementApprovalWizard({
         <div className="flex shrink-0 items-start justify-between border-b border-[#edf0ed] px-4 py-3 sm:px-7 sm:py-4">
           <div>
             <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#6b8a76]">
-              {readOnly ? "Public read-only review" : "Owner approval"}
+              {readOnly ? "Public read-only review" : agreement.status === "ACTIVE" && agreement.mandatoryDetailsApprovedAt ? "Edit approved agreement" : "Complete details & approve"}
             </p>
             <h2 id="agreement-review-title" className="mt-1 text-[18px] font-semibold text-[#203328]">
               Review agreement
@@ -180,18 +362,57 @@ export default function AgreementApprovalWizard({
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-7">
           {step.id === "kyc" ? (
             <>
-              <ReviewHeading title="Tenant and unit details" text="Check the tenant, ward number, and room number." />
-              <div className="grid gap-3 sm:grid-cols-2">
-                <ReviewValue label="Tenant" value={tenantName} />
-                <ReviewValue label="Tenant mobile" value={readOnly ? "Private on this page" : tenantMobile ? `+${tenantMobile}` : "Not provided"} />
-                <ReviewValue label="Ward No." value={wardNumber || "Not recorded"} />
-                <ReviewValue label="Room No." value={roomNumber || "Not recorded"} />
-              </div>
-              <p className="rounded-lg bg-[#f7faf7] px-3 py-2 text-[10px] leading-5 text-[#718078]">
-                {readOnly
-                  ? "Private contact and identity details are not displayed on this shared page."
-                  : "KYC documents are not stored in Rent-Sync. Contact the account owner if the tenant, ward number, or room number needs correction."}
-              </p>
+              <ReviewHeading title="Mandatory agreement details" text={readOnly ? "Tenant and unit details." : "Complete every required field before approval. These values are saved to the owner, tenant, property, and unit records and used in the PDF."} />
+              {readOnly ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <ReviewValue label="Tenant" value={tenantName} />
+                  <ReviewValue label="Tenant mobile" value="Private on this page" />
+                  <ReviewValue label="Ward No." value={wardNumber || "Not recorded"} />
+                  <ReviewValue label="Room No." value={roomNumber || "Not recorded"} />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <section className="rounded-xl border border-[#e7ece7] p-3 sm:p-4">
+                    <h4 className="mb-3 text-[11px] font-semibold text-[#294034]">Owner details</h4>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <ApprovalField label="Owner full name" required value={ownerDetails.fullName} onChange={(value) => { setOwnerDetails((current) => ({ ...current, fullName: value })); setError(""); }} />
+                      <ReviewValue label="Owner mobile" value={owner?.mobileNumber ? `+${owner.mobileNumber}` : "Not recorded"} />
+                      <ApprovalField label="Owner Aadhaar (12 digits)" required value={ownerDetails.aadhaarNumber} maxLength={12} inputMode="numeric" onChange={(value) => { setOwnerDetails((current) => ({ ...current, aadhaarNumber: value.replace(/\D/g, "") })); setError(""); }} />
+                      <ApprovalField label="Father / guardian name" required value={ownerDetails.fatherName} onChange={(value) => { setOwnerDetails((current) => ({ ...current, fatherName: value })); setError(""); }} />
+                      <PartyAddressFieldsInput
+                        values={ownerDetails}
+                        onChange={(field, value) => { setOwnerDetails((current) => ({ ...current, [field]: value })); setError(""); }}
+                      />
+                    </div>
+                  </section>
+                  <section className="rounded-xl border border-[#e7ece7] p-3 sm:p-4">
+                    <h4 className="mb-3 text-[11px] font-semibold text-[#294034]">Tenant details</h4>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <ApprovalField label="Tenant full name" required value={tenantDetails.fullName} onChange={(value) => { setTenantDetails((current) => ({ ...current, fullName: value })); setError(""); }} />
+                      <ApprovalField label="Tenant mobile" required value={tenantDetails.mobileNumber} inputMode="numeric" maxLength={15} onChange={(value) => { setTenantDetails((current) => ({ ...current, mobileNumber: value.replace(/\D/g, "") })); setError(""); }} />
+                      <ApprovalField label="Tenant Aadhaar (12 digits)" required value={tenantDetails.aadhaarNumber} inputMode="numeric" maxLength={12} onChange={(value) => { setTenantDetails((current) => ({ ...current, aadhaarNumber: value.replace(/\D/g, "") })); setError(""); }} />
+                      <PartyAddressFieldsInput
+                        values={tenantDetails}
+                        onChange={(field, value) => { setTenantDetails((current) => ({ ...current, [field]: value })); setError(""); }}
+                      />
+                      <ApprovalField label="Business / trade name" required value={tenantDetails.businessName} onChange={(value) => { setTenantDetails((current) => ({ ...current, businessName: value })); setError(""); }} />
+                      <ApprovalField label="Business nature (PDF use)" required value={tenantDetails.businessNature} placeholder="e.g. Retail, Office, Warehouse" onChange={(value) => { setTenantDetails((current) => ({ ...current, businessNature: value })); setError(""); }} />
+                    </div>
+                  </section>
+                  <section className="rounded-xl border border-[#e7ece7] p-3 sm:p-4">
+                    <h4 className="mb-3 text-[11px] font-semibold text-[#294034]">Property and unit details</h4>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <ApprovalField label="Property street address" required value={propertyDetails.address} onChange={(value) => { setPropertyDetails((current) => ({ ...current, address: value })); setError(""); }} />
+                      <ApprovalField label="Panchayat" required value={propertyDetails.panchayat} onChange={(value) => { setPropertyDetails((current) => ({ ...current, panchayat: value })); setError(""); }} />
+                      <ApprovalField label="City" required value={propertyDetails.city} onChange={(value) => { setPropertyDetails((current) => ({ ...current, city: value })); setError(""); }} />
+                      <ApprovalField label="State" required value={propertyDetails.state} onChange={(value) => { setPropertyDetails((current) => ({ ...current, state: value })); setError(""); }} />
+                      <ApprovalField label="Postal code" required value={propertyDetails.postalCode} onChange={(value) => { setPropertyDetails((current) => ({ ...current, postalCode: value })); setError(""); }} />
+                      <ApprovalField label="Ward number" required value={propertyDetails.ward} onChange={(value) => { setPropertyDetails((current) => ({ ...current, ward: value })); setError(""); }} />
+                      <ApprovalField label="Room / unit number" required value={propertyDetails.roomNumber} onChange={(value) => { setPropertyDetails((current) => ({ ...current, roomNumber: value })); setError(""); }} />
+                    </div>
+                  </section>
+                </div>
+              )}
             </>
           ) : null}
 
@@ -265,22 +486,21 @@ export default function AgreementApprovalWizard({
           ) : null}
 
           {step.id === "important-terms" ? (
-            <>
-              <ReviewHeading
-                title="Important terms"
-                text="Important obligations are managed in the Terms module and cannot be changed during approval."
-              />
-              {importantObligations.length ? (
-                <ol className={`space-y-2 rounded-xl border border-[#f1dfb4] bg-[#fffaf0] p-4 leading-6 text-[#53675a] ${readOnly ? "text-[13px]" : "text-[10px]"}`}>
-                  {importantObligations.map((item) => (
-                    <li key={item.id} className="flex gap-2">
-                      <span className="shrink-0 font-semibold text-[#805b13]">{item.serialNumber}.</span>
-                      <span>{item.text}</span>
-                    </li>
-                  ))}
+            (() => {
+              const additionalImportantTerms = (agreement.importantTerms ?? "")
+                .split(/\r?\n/)
+                .map((term) => term.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
+                .filter(Boolean);
+              const importantTerms = [
+                ...importantObligations.map((item) => item.text.trim()).filter(Boolean),
+                ...additionalImportantTerms,
+              ];
+              return importantTerms.length ? (
+                <ol className={`list-decimal space-y-2 pl-5 leading-6 text-[#53675a] ${readOnly ? "text-[13px]" : "text-[10px]"}`}>
+                  {importantTerms.map((term, index) => <li key={`${index}-${term}`}>{term}</li>)}
                 </ol>
-              ) : <p className="rounded-lg bg-[#f7faf7] px-3 py-2 text-[10px] text-[#718078]">No mapped terms have been marked as important obligations.</p>}
-            </>
+              ) : null;
+            })()
           ) : null}
 
           {step.id === "approve" ? (
@@ -353,7 +573,7 @@ export default function AgreementApprovalWizard({
             ) : (
               <button type="button" onClick={() => readOnly ? onClose() : void approve()} disabled={saving} className="col-span-2 flex h-10 min-w-0 items-center justify-center gap-2 rounded-lg bg-[#176b4b] px-2 text-[11px] font-semibold text-white hover:bg-[#10583c] disabled:opacity-60 sm:col-span-1 sm:px-4">
                 {readOnly ? <Check size={14} /> : saving ? <LoaderCircle size={14} className="animate-spin" /> : <Check size={14} />}
-                {readOnly ? "Done" : saving ? "Saving approval..." : "Approve as owner"}
+                {readOnly ? "Done" : saving ? "Saving approval..." : agreement.status === "ACTIVE" && agreement.mandatoryDetailsApprovedAt ? "Save & approve again" : "Complete & approve"}
               </button>
             )}
           </div>
@@ -378,5 +598,39 @@ function ReviewValue({ label, value }: { label: string; value: string }) {
       <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-[#829087]">{label}</p>
       <p className="mt-1 text-[11px] leading-5 text-[#31483a]">{value}</p>
     </div>
+  );
+}
+
+function ApprovalField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  inputMode,
+  maxLength,
+  required = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  inputMode?: "numeric" | "text";
+  maxLength?: number;
+  required?: boolean;
+}) {
+  return (
+    <label className="block text-[10px] font-semibold text-[#465a4c]">
+      {label}{required ? <span className="ml-1 text-[#b34e36]">*</span> : null}
+      <input
+        type="text"
+        required={required}
+        value={value}
+        placeholder={placeholder}
+        inputMode={inputMode}
+        maxLength={maxLength}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#fcfdfc] px-3 text-[12px] text-[#33473a] outline-none focus:border-[#8cbd9b]"
+      />
+    </label>
   );
 }

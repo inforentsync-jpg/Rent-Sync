@@ -4,12 +4,23 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, LoaderCircle, LogOut, Save, UserRound } from "lucide-react";
+import PartyAddressInputs from "@/components/party-address-inputs";
+import type { PartyAddressFields } from "@/lib/party-address";
 
 type OwnerProfileData = {
   id: string;
   fullName: string;
   mobileNumber: string;
   email: string | null;
+  aadhaarNumber?: string | null;
+  fullAddress?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  district?: string | null;
+  state?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+  fatherName?: string | null;
   createdAt: string;
   passwordConfigured: boolean;
 };
@@ -19,6 +30,9 @@ export default function OwnerProfile() {
   const [profile, setProfile] = useState<OwnerProfileData | null>(null);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [aadhaarNumber, setAadhaarNumber] = useState("");
+  const [address, setAddress] = useState<PartyAddressFields>({});
+  const [fatherName, setFatherName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [testOtp, setTestOtp] = useState<string | null>(null);
@@ -39,6 +53,16 @@ export default function OwnerProfile() {
         setProfile(payload.profile);
         setFullName(payload.profile.fullName);
         setEmail(payload.profile.email ?? "");
+        setAadhaarNumber(payload.profile.aadhaarNumber ?? "");
+        setAddress({
+          addressLine1: payload.profile.addressLine1 ?? "",
+          addressLine2: payload.profile.addressLine2 ?? "",
+          district: payload.profile.district ?? "",
+          state: payload.profile.state ?? "",
+          city: payload.profile.city ?? "",
+          postalCode: payload.profile.postalCode ?? "",
+        });
+        setFatherName(payload.profile.fatherName ?? "");
         setTestOtp(payload.testOtp);
       } catch (cause) {
         if (!cancelled) {
@@ -71,13 +95,23 @@ export default function OwnerProfile() {
       const response = await fetch("/api/owner/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fullName, email, password }),
+        body: JSON.stringify({ fullName, email, aadhaarNumber, ...address, fatherName, password }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Unable to save your profile.");
       setProfile(payload.profile);
       setFullName(payload.profile.fullName);
       setEmail(payload.profile.email ?? "");
+      setAadhaarNumber(payload.profile.aadhaarNumber ?? "");
+      setAddress({
+        addressLine1: payload.profile.addressLine1 ?? "",
+        addressLine2: payload.profile.addressLine2 ?? "",
+        district: payload.profile.district ?? "",
+        state: payload.profile.state ?? "",
+        city: payload.profile.city ?? "",
+        postalCode: payload.profile.postalCode ?? "",
+      });
+      setFatherName(payload.profile.fatherName ?? "");
       setPassword("");
       setConfirmPassword("");
       setMessage("Profile saved.");
@@ -160,6 +194,32 @@ export default function OwnerProfile() {
                 placeholder="you@example.com"
                 className="h-11 w-full rounded-xl border border-[#e3eae4] bg-[#fbfcfb] px-3 text-[13px] outline-none placeholder:text-[#abb5ad] focus:border-[#6eaa83]"
               />
+              <label htmlFor="owner-profile-aadhaar" className="mb-2 mt-4 block text-[11px] font-semibold text-[#44574b]">Aadhaar number</label>
+              <input
+                id="owner-profile-aadhaar"
+                inputMode="numeric"
+                maxLength={12}
+                value={aadhaarNumber}
+                onChange={(event) => setAadhaarNumber(event.target.value.replace(/[^0-9]/g, ""))}
+                placeholder="12-digit Aadhaar"
+                className="h-11 w-full rounded-xl border border-[#e3eae4] bg-[#fbfcfb] px-3 text-[13px] outline-none focus:border-[#6eaa83]"
+              />
+              <label htmlFor="owner-profile-father" className="mb-2 mt-4 block text-[11px] font-semibold text-[#44574b]">Father / Guardian name</label>
+              <input
+                id="owner-profile-father"
+                maxLength={120}
+                value={fatherName}
+                onChange={(event) => setFatherName(event.target.value)}
+                placeholder="Father or guardian name"
+                className="h-11 w-full rounded-xl border border-[#e3eae4] bg-[#fbfcfb] px-3 text-[13px] outline-none focus:border-[#6eaa83]"
+              />
+              <div className="mt-4">
+                <PartyAddressInputs
+                  idPrefix="owner-profile-address"
+                  values={address}
+                  onChange={(field, value) => setAddress((current) => ({ ...current, [field]: value }))}
+                />
+              </div>
               <p className="mb-2 mt-6 text-[11px] font-semibold text-[#44574b]">Password configuration</p>
               <label htmlFor="owner-profile-password" className="mb-2 mt-3 block text-[11px] font-medium text-[#65766a]">{profile.passwordConfigured ? "New password" : "Set password"}</label>
               <input

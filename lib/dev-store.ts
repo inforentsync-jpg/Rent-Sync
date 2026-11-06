@@ -19,6 +19,7 @@ export type DevBuilding = {
   city: string;
   state: string;
   postalCode: string;
+  panchayat?: string | null;
   ownerName: string;
   ownerMobile: string;
   ownerId: string;
@@ -32,6 +33,15 @@ export type DevOwner = {
   fullName: string;
   mobileNumber: string;
   email?: string | null;
+  aadhaarNumber?: string | null;
+  fullAddress?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  district?: string | null;
+  state?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+  fatherName?: string | null;
   passwordHash?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -71,7 +81,14 @@ export type DevTenant = {
   fullName: string;
   mobileNumber: string | null;
   businessName?: string | null;
+  businessNature?: string | null;
   fullAddress?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  district?: string | null;
+  state?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
   aadhaarNumber?: string | null;
   fatherName?: string | null;
   email?: string | null;
@@ -97,6 +114,7 @@ export type DevAgreement = {
   agreementYear: number;
   ownerApprovedAt?: string | null;
   tenantApprovedAt?: string | null;
+  mandatoryDetailsApprovedAt?: string | null;
   renewalOfId?: string | null;
   createdAt: string;
 };
@@ -392,12 +410,37 @@ export function updateDevOwnerProfile(
   fullName: string,
   email: string | null,
   passwordHash?: string,
+  agreementDetails?: {
+    aadhaarNumber: string | null;
+    fullAddress: string | null;
+    addressLine1?: string | null;
+    addressLine2?: string | null;
+    district?: string | null;
+    state?: string | null;
+    city?: string | null;
+    postalCode?: string | null;
+    fatherName: string | null;
+  },
 ) {
   return withStore(async (store) => {
     const owner = store.owners.find((entry) => entry.mobileNumber === mobileNumber);
     if (!owner) return null;
     owner.fullName = fullName;
     owner.email = email;
+    for (const building of store.buildings) {
+      if (building.ownerId === owner.id) building.ownerName = fullName;
+    }
+    if (agreementDetails) {
+      owner.aadhaarNumber = agreementDetails.aadhaarNumber;
+      owner.fullAddress = agreementDetails.fullAddress;
+      owner.addressLine1 = agreementDetails.addressLine1;
+      owner.addressLine2 = agreementDetails.addressLine2;
+      owner.district = agreementDetails.district;
+      owner.state = agreementDetails.state;
+      owner.city = agreementDetails.city;
+      owner.postalCode = agreementDetails.postalCode;
+      owner.fatherName = agreementDetails.fatherName;
+    }
     if (passwordHash) owner.passwordHash = passwordHash;
     owner.updatedAt = new Date().toISOString();
     await writeStore(store);
@@ -438,7 +481,27 @@ export function getDevOwnerPortfolio(mobileNumber: string) {
       (entry) => assetIds.has(entry.assetId) || tenantIds.has(entry.tenantId),
     );
     const deletedAgreements = store.archivedAgreements.filter((entry) => entry.ownerId === owner.id);
-    return { owner, companies, buildings, assets, tenants, agreements, deletedAgreements };
+    const assetsWithApprovedAdvance = assets.map((asset) => {
+      const latestApprovedAgreement = agreements
+        .filter((agreement) =>
+          agreement.assetId === asset.id &&
+          agreement.status !== "DRAFT" &&
+          agreement.ownerApprovedAt !== null &&
+          agreement.ownerApprovedAt !== undefined,
+        )
+        .sort((left, right) => {
+          const yearDifference = right.agreementYear - left.agreementYear;
+          if (yearDifference !== 0) return yearDifference;
+          const leftApproved = left.ownerApprovedAt ? new Date(left.ownerApprovedAt).getTime() : 0;
+          const rightApproved = right.ownerApprovedAt ? new Date(right.ownerApprovedAt).getTime() : 0;
+          return rightApproved - leftApproved;
+        })[0];
+      return {
+        ...asset,
+        securityDeposit: latestApprovedAgreement?.securityDeposit ?? asset.securityDeposit,
+      };
+    });
+    return { owner, companies, buildings, assets: assetsWithApprovedAdvance, tenants, agreements, deletedAgreements };
   });
 }
 
@@ -585,6 +648,7 @@ export function updateDevPortfolioItem(
         city: input.city ?? building.city,
         state: input.state ?? building.state,
         postalCode: input.postalCode ?? building.postalCode,
+        panchayat: input.panchayat ?? building.panchayat ?? null,
         updatedAt: now,
       });
       await writeStore(store);
@@ -603,7 +667,14 @@ export function updateDevPortfolioItem(
     tenant.fullName = input.fullName ?? tenant.fullName;
     tenant.mobileNumber = mobileNumber;
     tenant.businessName = input.businessName;
+    tenant.businessNature = input.businessNature;
     tenant.fullAddress = input.fullAddress;
+    tenant.addressLine1 = input.addressLine1;
+    tenant.addressLine2 = input.addressLine2;
+    tenant.district = input.district;
+    tenant.state = input.state;
+    tenant.city = input.city;
+    tenant.postalCode = input.postalCode;
     tenant.aadhaarNumber = input.aadhaarNumber;
     tenant.fatherName = input.fatherName;
     tenant.email = input.email;
@@ -838,12 +909,8 @@ export function updateDevDraftAgreement(
     if (!owner || !agreement || !asset || building?.ownerId !== owner.id) {
       throw new Error("Agreement not found in your account.");
     }
-    if (
-      agreement.status !== "DRAFT" ||
-      agreement.ownerApprovedAt ||
-      agreement.tenantApprovedAt
-    ) {
-      throw new Error("Only unapproved draft agreements can be edited.");
+    if (agreement.status !== "DRAFT" && agreement.status !== "ACTIVE") {
+      throw new Error("Only draft or active agreements can be edited and re-approved.");
     }
     if (
       !hasValidAgreementDurationTerm(
@@ -867,7 +934,13 @@ export function updateDevDraftAgreement(
     ) {
       throw new DevAgreementConflictError("An agreement already exists for this tenant, unit, and year.");
     }
-    Object.assign(agreement, input, { agreementYear });
+    Object.assign(agreement, input, {
+      agreementYear,
+      status: "DRAFT",
+      ownerApprovedAt: null,
+      tenantApprovedAt: null,
+      mandatoryDetailsApprovedAt: null,
+    });
     await writeStore(store);
     return agreement;
   });
@@ -881,7 +954,14 @@ export function createDevTenant(
   startDate: string | null,
   kyc: {
     businessName: string | null;
+    businessNature: string | null;
     fullAddress: string | null;
+    addressLine1: string | null;
+    addressLine2: string | null;
+    district: string | null;
+    state: string | null;
+    city: string | null;
+    postalCode: string | null;
     aadhaarNumber: string | null;
     fatherName: string | null;
     email: string | null;
@@ -1103,6 +1183,35 @@ export type AgreementReviewInput = {
   endDate: string;
   monthlyRent: number;
   securityDeposit: number;
+  ownerFullName: string;
+  ownerAadhaarNumber: string;
+  ownerFullAddress: string;
+  ownerAddressLine1: string;
+  ownerAddressLine2: string;
+  ownerDistrict: string;
+  ownerState: string;
+  ownerCity: string;
+  ownerPostalCode: string;
+  ownerFatherName: string;
+  tenantFullName: string;
+  tenantMobileNumber: string;
+  tenantBusinessName: string;
+  tenantBusinessNature: string;
+  tenantFullAddress: string;
+  tenantAddressLine1: string;
+  tenantAddressLine2: string;
+  tenantDistrict: string;
+  tenantState: string;
+  tenantCity: string;
+  tenantPostalCode: string;
+  tenantAadhaarNumber: string;
+  buildingAddress: string;
+  buildingCity: string;
+  buildingState: string;
+  buildingPostalCode: string;
+  buildingPanchayat: string;
+  assetWard: string;
+  assetRoomNumber: string;
 };
 
 export async function reviewDevAgreement(
@@ -1113,7 +1222,7 @@ export async function reviewDevAgreement(
   return withStore(async (store) => {
     const owner = store.owners.find((entry) => entry.mobileNumber === ownerMobile);
     const agreement = store.agreements.find((entry) => entry.id === agreementId);
-    if (!agreement || agreement.status !== "DRAFT") return null;
+    if (!agreement || (agreement.status !== "DRAFT" && agreement.status !== "ACTIVE")) return null;
     const asset = store.assets.find((entry) => entry.id === agreement.assetId);
     const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
     const company = store.companies.find((entry) => entry.id === building?.companyId);
@@ -1132,6 +1241,11 @@ export async function reviewDevAgreement(
       input.securityDeposit < 0
     ) {
       throw new Error("Enter valid agreement dates, monthly rent, and security deposit.");
+    }
+    const tenant = store.tenants.find((entry) => entry.id === agreement.tenantId);
+    if (!tenant) throw new Error("Tenant not found in this agreement.");
+    if (store.tenants.some((entry) => entry.id !== tenant.id && entry.mobileNumber === input.tenantMobileNumber)) {
+      throw new DevAgreementConflictError("This tenant mobile number is already registered.");
     }
     const agreementYear = Number(input.startDate.slice(0, 4));
     if (
@@ -1167,9 +1281,67 @@ export async function reviewDevAgreement(
       importantTerms: agreement.importantTerms ?? "",
       status: "ACTIVE",
       ownerApprovedAt: new Date().toISOString(),
-      tenantApprovedAt: agreement.tenantApprovedAt ?? null,
+      tenantApprovedAt: null,
+      mandatoryDetailsApprovedAt: new Date().toISOString(),
     };
+    Object.assign(owner, {
+      fullName: input.ownerFullName,
+      aadhaarNumber: input.ownerAadhaarNumber,
+      fullAddress: input.ownerFullAddress,
+      addressLine1: input.ownerAddressLine1,
+      addressLine2: input.ownerAddressLine2 || null,
+      district: input.ownerDistrict,
+      state: input.ownerState,
+      city: input.ownerCity,
+      postalCode: input.ownerPostalCode,
+      fatherName: input.ownerFatherName,
+      updatedAt: new Date().toISOString(),
+    });
+    building.ownerName = input.ownerFullName;
+    Object.assign(tenant, {
+      fullName: input.tenantFullName,
+      mobileNumber: input.tenantMobileNumber,
+      businessName: input.tenantBusinessName,
+      businessNature: input.tenantBusinessNature,
+      fullAddress: input.tenantFullAddress,
+      addressLine1: input.tenantAddressLine1,
+      addressLine2: input.tenantAddressLine2 || null,
+      district: input.tenantDistrict,
+      state: input.tenantState,
+      city: input.tenantCity,
+      postalCode: input.tenantPostalCode,
+      aadhaarNumber: input.tenantAadhaarNumber,
+      updatedAt: new Date().toISOString(),
+    });
+    Object.assign(building, {
+      address: input.buildingAddress,
+      city: input.buildingCity,
+      state: input.buildingState,
+      postalCode: input.buildingPostalCode,
+      panchayat: input.buildingPanchayat,
+      updatedAt: new Date().toISOString(),
+    });
+    Object.assign(asset, {
+      ward: input.assetWard,
+      roomNumber: input.assetRoomNumber,
+      updatedAt: new Date().toISOString(),
+    });
     Object.assign(agreement, updatedAgreement);
+    const latestApprovedAgreement = store.agreements
+      .filter((entry) =>
+        entry.assetId === asset.id &&
+        entry.status !== "DRAFT" &&
+        entry.ownerApprovedAt !== null &&
+        entry.ownerApprovedAt !== undefined,
+      )
+      .sort((left, right) => {
+        const yearDifference = right.agreementYear - left.agreementYear;
+        if (yearDifference !== 0) return yearDifference;
+        const leftApproved = left.ownerApprovedAt ? new Date(left.ownerApprovedAt).getTime() : 0;
+        const rightApproved = right.ownerApprovedAt ? new Date(right.ownerApprovedAt).getTime() : 0;
+        return rightApproved - leftApproved;
+      })[0];
+    asset.securityDeposit = latestApprovedAgreement?.securityDeposit ?? input.securityDeposit;
     await writeStore(store);
     return agreement;
   });

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/database";
-import { generateAgreementPdf } from "@/lib/agreement-pdf";
+import { generateAgreementPdf } from "@/lib/agreement-pdf.clean";
 import { shouldUseDatabase } from "@/lib/storage-mode";
 
 export const dynamic = "force-dynamic";
@@ -39,10 +39,16 @@ export async function GET(
     const agreement = await prisma.rentalAgreement.findFirst({
       where: { id, tenantId: tenant.id },
       include: {
-        tenant: { select: { fullName: true, mobileNumber: true } },
+        tenant: {
+          select: {
+            fullName: true, mobileNumber: true, fullAddress: true,
+            addressLine1: true, addressLine2: true, district: true, state: true, city: true, postalCode: true,
+            aadhaarNumber: true, businessName: true, businessNature: true,
+          },
+        },
         asset: {
           include: {
-            building: true,
+            building: { include: { owner: true } },
             termTemplates: {
               orderBy: { template: { name: "asc" } },
               include: {
@@ -56,6 +62,12 @@ export async function GET(
     if (!agreement) {
       return NextResponse.json({ error: "Agreement not found on this shared tenant page." }, { status: 404 });
     }
+    if (agreement.status === "ACTIVE" && !agreement.mandatoryDetailsApprovedAt) {
+      return NextResponse.json(
+        { error: "This agreement is being updated by the property owner and will be available after re-approval." },
+        { status: 409, headers: { "Cache-Control": "no-store" } },
+      );
+    }
 
     const { asset, tenant: agreementTenant } = agreement;
     const building = asset.building;
@@ -66,10 +78,27 @@ export async function GET(
       monthlyRent: agreement.monthlyRent,
       securityDeposit: agreement.securityDeposit,
       isDraft: agreement.status === "DRAFT",
-      ownerName: building.ownerName,
-      ownerMobile: building.ownerMobile,
+      ownerName: building.owner?.fullName || building.ownerName,
+      ownerMobile: building.owner?.mobileNumber || building.ownerMobile,
+      ownerAadhaar: building.owner?.aadhaarNumber ?? null,
+      ownerAddress: building.owner?.fullAddress ?? null,
+      ownerAddressLine1: building.owner?.addressLine1 ?? null,
+      ownerAddressLine2: building.owner?.addressLine2 ?? null,
+      ownerDistrict: building.owner?.district ?? null,
+      ownerState: building.owner?.state ?? null,
+      ownerCity: building.owner?.city ?? null,
+      ownerPostalCode: building.owner?.postalCode ?? null,
+      ownerFatherName: building.owner?.fatherName ?? null,
       tenantName: agreementTenant.fullName,
       tenantMobile: agreementTenant.mobileNumber,
+      tenantAddress: agreementTenant.fullAddress ?? null,
+      tenantAddressLine1: agreementTenant.addressLine1 ?? null,
+      tenantAddressLine2: agreementTenant.addressLine2 ?? null,
+      tenantDistrict: agreementTenant.district ?? null,
+      tenantState: agreementTenant.state ?? null,
+      tenantCity: agreementTenant.city ?? null,
+      tenantPostalCode: agreementTenant.postalCode ?? null,
+      tenantAadhaar: agreementTenant.aadhaarNumber ?? null,
       buildingName: building.name,
       buildingAddress: building.address,
       city: building.city,
@@ -79,6 +108,10 @@ export async function GET(
       unitNumber: asset.unitNumber,
       assetType: asset.assetType,
       ward: asset.ward,
+      panchayat: building.panchayat,
+      roomNumber: asset.roomNumber ?? asset.unitNumber,
+      usageDescription: agreementTenant.businessNature ?? null,
+      tradeName: agreementTenant.businessName ?? null,
       templateTerms: asset.termTemplates.map(({ template }) => ({
         heading: template.name,
         items: template.items.map(({ position, text, importantObligation }) => ({

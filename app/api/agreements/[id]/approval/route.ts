@@ -11,6 +11,7 @@ import {
 } from "@/lib/agreement-duration";
 import { getOwnerSession } from "@/lib/session";
 import { shouldUseDatabase } from "@/lib/storage-mode";
+import { formatPartyAddress, PARTY_ADDRESS_LIMITS } from "@/lib/party-address";
 
 class AgreementApprovalError extends Error {
   constructor(message: string, readonly status: number) {
@@ -18,13 +19,89 @@ class AgreementApprovalError extends Error {
   }
 }
 
+function optionalReviewText(value: unknown, maxLength: number) {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  return text.length <= maxLength ? text : null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
+function requiredText(value: unknown, maxLength: number) {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  return text.length > 0 && text.length <= maxLength ? text : null;
+}
+
 function parseReviewInput(value: unknown): AgreementReviewInput | null {
   if (!isRecord(value)) return null;
-  const { startDate, endDate, monthlyRent, securityDeposit } = value;
+  const {
+    startDate,
+    endDate,
+    monthlyRent,
+    securityDeposit,
+    ownerFullName,
+    ownerAadhaarNumber,
+    ownerFullAddress,
+    ownerAddressLine1,
+    ownerAddressLine2,
+    ownerDistrict,
+    ownerState,
+    ownerCity,
+    ownerPostalCode,
+    ownerFatherName,
+    tenantFullName,
+    tenantMobileNumber,
+    tenantBusinessName,
+    tenantBusinessNature,
+    tenantFullAddress,
+    tenantAddressLine1,
+    tenantAddressLine2,
+    tenantDistrict,
+    tenantState,
+    tenantCity,
+    tenantPostalCode,
+    tenantAadhaarNumber,
+    buildingAddress,
+    buildingCity,
+    buildingState,
+    buildingPostalCode,
+    buildingPanchayat,
+    assetWard,
+    assetRoomNumber,
+  } = value;
+  const required = {
+    ownerFullName: requiredText(ownerFullName, 120),
+    ownerAadhaarNumber: requiredText(ownerAadhaarNumber, 12),
+    ownerAddressLine1: requiredText(ownerAddressLine1, PARTY_ADDRESS_LIMITS.addressLine1),
+    ownerAddressLine2: optionalReviewText(ownerAddressLine2, PARTY_ADDRESS_LIMITS.addressLine2),
+    ownerDistrict: requiredText(ownerDistrict, PARTY_ADDRESS_LIMITS.district),
+    ownerState: requiredText(ownerState, PARTY_ADDRESS_LIMITS.state),
+    ownerCity: requiredText(ownerCity, PARTY_ADDRESS_LIMITS.city),
+    ownerPostalCode: requiredText(ownerPostalCode, PARTY_ADDRESS_LIMITS.postalCode),
+    ownerFatherName: requiredText(ownerFatherName, 120),
+    tenantFullName: requiredText(tenantFullName, 120),
+    tenantMobileNumber: requiredText(tenantMobileNumber, 15),
+    tenantBusinessName: requiredText(tenantBusinessName, 160),
+    tenantBusinessNature: requiredText(tenantBusinessNature, 160),
+    tenantAddressLine1: requiredText(tenantAddressLine1, PARTY_ADDRESS_LIMITS.addressLine1),
+    tenantAddressLine2: optionalReviewText(tenantAddressLine2, PARTY_ADDRESS_LIMITS.addressLine2),
+    tenantDistrict: requiredText(tenantDistrict, PARTY_ADDRESS_LIMITS.district),
+    tenantState: requiredText(tenantState, PARTY_ADDRESS_LIMITS.state),
+    tenantCity: requiredText(tenantCity, PARTY_ADDRESS_LIMITS.city),
+    tenantPostalCode: requiredText(tenantPostalCode, PARTY_ADDRESS_LIMITS.postalCode),
+    tenantAadhaarNumber: requiredText(tenantAadhaarNumber, 12),
+    buildingAddress: requiredText(buildingAddress, 255),
+    buildingCity: requiredText(buildingCity, 100),
+    buildingState: requiredText(buildingState, 100),
+    buildingPostalCode: requiredText(buildingPostalCode, 12),
+    buildingPanchayat: requiredText(buildingPanchayat, 120),
+    assetWard: requiredText(assetWard, 20),
+    assetRoomNumber: requiredText(assetRoomNumber, 40),
+  };
   if (
     typeof startDate !== "string" ||
     typeof endDate !== "string" ||
@@ -33,7 +110,11 @@ function parseReviewInput(value: unknown): AgreementReviewInput | null {
     monthlyRent <= 0 ||
     typeof securityDeposit !== "number" ||
     !Number.isSafeInteger(securityDeposit) ||
-    securityDeposit < 0
+    securityDeposit < 0 ||
+    Object.values(required).some((entry) => entry === null) ||
+    !/^\d{12}$/.test(required.ownerAadhaarNumber ?? "") ||
+    !/^\d{12}$/.test(required.tenantAadhaarNumber ?? "") ||
+    !/^\d{10,15}$/.test((required.tenantMobileNumber ?? "").replace(/\D/g, ""))
   ) {
     return null;
   }
@@ -42,6 +123,49 @@ function parseReviewInput(value: unknown): AgreementReviewInput | null {
     endDate,
     monthlyRent,
     securityDeposit,
+    ownerFullName: required.ownerFullName!,
+    ownerAadhaarNumber: required.ownerAadhaarNumber!,
+    ownerFullAddress: formatPartyAddress({
+      addressLine1: required.ownerAddressLine1,
+      addressLine2: required.ownerAddressLine2,
+      district: required.ownerDistrict,
+      state: required.ownerState,
+      city: required.ownerCity,
+      postalCode: required.ownerPostalCode,
+    }),
+    ownerAddressLine1: required.ownerAddressLine1!,
+    ownerAddressLine2: required.ownerAddressLine2 ?? "",
+    ownerDistrict: required.ownerDistrict!,
+    ownerState: required.ownerState!,
+    ownerCity: required.ownerCity!,
+    ownerPostalCode: required.ownerPostalCode!,
+    ownerFatherName: required.ownerFatherName!,
+    tenantFullName: required.tenantFullName!,
+    tenantMobileNumber: required.tenantMobileNumber!.replace(/\D/g, ""),
+    tenantBusinessName: required.tenantBusinessName!,
+    tenantBusinessNature: required.tenantBusinessNature!,
+    tenantFullAddress: formatPartyAddress({
+      addressLine1: required.tenantAddressLine1,
+      addressLine2: required.tenantAddressLine2,
+      district: required.tenantDistrict,
+      state: required.tenantState,
+      city: required.tenantCity,
+      postalCode: required.tenantPostalCode,
+    }),
+    tenantAddressLine1: required.tenantAddressLine1!,
+    tenantAddressLine2: required.tenantAddressLine2 ?? "",
+    tenantDistrict: required.tenantDistrict!,
+    tenantState: required.tenantState!,
+    tenantCity: required.tenantCity!,
+    tenantPostalCode: required.tenantPostalCode!,
+    tenantAadhaarNumber: required.tenantAadhaarNumber!,
+    buildingAddress: required.buildingAddress!,
+    buildingCity: required.buildingCity!,
+    buildingState: required.buildingState!,
+    buildingPostalCode: required.buildingPostalCode!,
+    buildingPanchayat: required.buildingPanchayat!,
+    assetWard: required.assetWard!,
+    assetRoomNumber: required.assetRoomNumber!,
   };
 }
 
@@ -67,7 +191,7 @@ export async function PATCH(
   const input = parseReviewInput(body);
   if (!input) {
     return NextResponse.json(
-      { error: "Enter valid agreement dates, monthly rent, and security deposit before approving." },
+      { error: "Complete all mandatory owner, tenant, property, and unit fields. Enter valid 12-digit Aadhaar numbers, a valid tenant mobile number, agreement dates, rent, and deposit." },
       { status: 400 },
     );
   }
@@ -100,6 +224,8 @@ export async function PATCH(
           include: {
             asset: {
               select: {
+                id: true,
+                buildingId: true,
                 agreementDurationUnit: true,
                 agreementDurationValue: true,
                 building: {
@@ -113,8 +239,8 @@ export async function PATCH(
           },
         });
         if (!current) throw new AgreementApprovalError("Agreement not found.", 404);
-        if (current.status !== "DRAFT") {
-          throw new AgreementApprovalError("Only draft agreements can be approved.", 409);
+        if (current.status !== "DRAFT" && current.status !== "ACTIVE") {
+          throw new AgreementApprovalError("Only draft or active agreements can be re-approved.", 409);
         }
 
         const owner = await transaction.propertyOwner.findUnique({
@@ -125,6 +251,13 @@ export async function PATCH(
           current.asset.building.company?.ownerId ?? current.asset.building.ownerId;
         if (!owner || owner.id !== propertyOwnerId) {
           throw new AgreementApprovalError("This agreement is not assigned to your owner account.", 404);
+        }
+        const duplicateTenantMobile = await transaction.tenant.findFirst({
+          where: { id: { not: current.tenantId }, mobileNumber: input.tenantMobileNumber },
+          select: { id: true },
+        });
+        if (duplicateTenantMobile) {
+          throw new AgreementApprovalError("This tenant mobile number is already registered.", 409);
         }
 
         if (!isAgreementDurationUnit(current.asset.agreementDurationUnit)) {
@@ -175,7 +308,7 @@ export async function PATCH(
           throw new AgreementApprovalError("This asset already has an active agreement for those dates.", 409);
         }
 
-        return transaction.rentalAgreement.update({
+        const approvedAgreement = await transaction.rentalAgreement.update({
           where: { id },
           data: {
             startDate: startsAt,
@@ -184,11 +317,85 @@ export async function PATCH(
             monthlyRent: input.monthlyRent,
             securityDeposit: input.securityDeposit,
             ownerApprovedAt: new Date(),
+            tenantApprovedAt: null,
+            mandatoryDetailsApprovedAt: new Date(),
             status: "ACTIVE",
           },
         });
+        await transaction.propertyOwner.update({
+          where: { id: owner.id },
+          data: {
+            fullName: input.ownerFullName,
+            aadhaarNumber: input.ownerAadhaarNumber,
+            fullAddress: input.ownerFullAddress,
+            addressLine1: input.ownerAddressLine1,
+            addressLine2: input.ownerAddressLine2 || null,
+            district: input.ownerDistrict,
+            state: input.ownerState,
+            city: input.ownerCity,
+            postalCode: input.ownerPostalCode,
+            fatherName: input.ownerFatherName,
+          },
+        });
+        await transaction.tenant.update({
+          where: { id: current.tenantId },
+          data: {
+            fullName: input.tenantFullName,
+            mobileNumber: input.tenantMobileNumber,
+            businessName: input.tenantBusinessName,
+            businessNature: input.tenantBusinessNature,
+            fullAddress: input.tenantFullAddress,
+            addressLine1: input.tenantAddressLine1,
+            addressLine2: input.tenantAddressLine2 || null,
+            district: input.tenantDistrict,
+            state: input.tenantState,
+            city: input.tenantCity,
+            postalCode: input.tenantPostalCode,
+            aadhaarNumber: input.tenantAadhaarNumber,
+          },
+        });
+        await transaction.building.update({
+          where: { id: current.asset.buildingId },
+          data: {
+            ownerName: input.ownerFullName,
+            address: input.buildingAddress,
+            city: input.buildingCity,
+            state: input.buildingState,
+            postalCode: input.buildingPostalCode,
+            panchayat: input.buildingPanchayat,
+          },
+        });
+        await transaction.asset.update({
+          where: { id: current.assetId },
+          data: { ward: input.assetWard, roomNumber: input.assetRoomNumber },
+        });
+        const approvedAssetAgreements = await transaction.rentalAgreement.findMany({
+          where: {
+            assetId: current.assetId,
+            status: "ACTIVE",
+            ownerApprovedAt: { not: null },
+          },
+          select: {
+            agreementYear: true,
+            securityDeposit: true,
+            ownerApprovedAt: true,
+          },
+          orderBy: [{ agreementYear: "desc" }, { ownerApprovedAt: "desc" }],
+        });
+        const latestApprovedAgreement = approvedAssetAgreements[0];
+        if (latestApprovedAgreement) {
+          await transaction.asset.update({
+            where: { id: current.assetId },
+            data: { securityDeposit: latestApprovedAgreement.securityDeposit },
+          });
+        }
+        return approvedAgreement;
       },
-      { isolationLevel: "Serializable" },
+      {
+        isolationLevel: "Serializable",
+        maxWait: 15_000,
+        timeout: 30_000,
+      },
     );
     return NextResponse.json({ agreement });
   } catch (error) {

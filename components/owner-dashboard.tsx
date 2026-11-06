@@ -24,6 +24,8 @@ import AgreementFacts from "@/components/agreement-facts";
 import AgreementApprovalWizard, {
   type ReviewableAgreement,
 } from "@/components/agreement-approval-wizard";
+import PartyAddressInputs from "@/components/party-address-inputs";
+import { formatPartyAddress, type PartyAddressFields } from "@/lib/party-address";
 
 type Company = { id: string; name: string };
 type Building = {
@@ -34,6 +36,20 @@ type Building = {
   city: string;
   state: string;
   postalCode: string;
+  panchayat?: string | null;
+};
+type OwnerProfile = {
+  fullName: string;
+  mobileNumber: string;
+  aadhaarNumber?: string | null;
+  fullAddress?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  district?: string | null;
+  state?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+  fatherName?: string | null;
 };
 type TermItem = { id: string; position: number; text: string; importantObligation: boolean };
 type TermTemplate = {
@@ -69,7 +85,14 @@ type Tenant = {
   fullName: string;
   mobileNumber: string | null;
   businessName?: string | null;
+  businessNature?: string | null;
   fullAddress?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  district?: string | null;
+  state?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
   aadhaarNumber?: string | null;
   fatherName?: string | null;
   email?: string | null;
@@ -93,8 +116,16 @@ type Agreement = {
   agreementYear?: number;
   ownerApprovedAt?: string | null;
   tenantApprovedAt?: string | null;
+  mandatoryDetailsApprovedAt?: string | null;
   createdAt: string;
 };
+type AgreementApprovalFilter = "approved" | "not-approved";
+
+function isAgreementApproved(agreement: Agreement) {
+  return agreement.status !== "DRAFT" &&
+    Boolean(agreement.ownerApprovedAt && agreement.mandatoryDetailsApprovedAt);
+}
+
 type ArchivedAgreement = {
   id: string;
   originalAgreementId: string;
@@ -123,6 +154,7 @@ type ArchivedAgreement = {
   archivedAt: string;
 };
 type Portfolio = {
+  owner: OwnerProfile | null;
   companies: Company[];
   buildings: Building[];
   assets: Asset[];
@@ -170,6 +202,7 @@ function getDashboardRouteState() {
 }
 
 const emptyPortfolio: Portfolio = {
+  owner: null,
   companies: [],
   buildings: [],
   assets: [],
@@ -233,6 +266,13 @@ export default function OwnerDashboard() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [companySection, setCompanySection] = useState<"owner" | "company">("company");
+  const [ownerDetails, setOwnerDetails] = useState<Record<string, string>>({});
+  const [ownerDetailsLoading, setOwnerDetailsLoading] = useState(false);
+  const [ownerDetailsSaving, setOwnerDetailsSaving] = useState(false);
+  const [ownerDetailsError, setOwnerDetailsError] = useState("");
+  const [ownerDetailsMessage, setOwnerDetailsMessage] = useState("");
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [recordEditMode, setRecordEditMode] = useState(false);
   const [assetEditForm, setAssetEditForm] = useState<Record<string, string>>({});
   const [assetEditError, setAssetEditError] = useState("");
@@ -241,13 +281,20 @@ export default function OwnerDashboard() {
   const [recordEditError, setRecordEditError] = useState("");
   const [recordEditSaving, setRecordEditSaving] = useState(false);
   const [agreementTab, setAgreementTab] = useState<AgreementTab>("kyc");
+  const [agreementApprovalFilter, setAgreementApprovalFilter] =
+    useState<AgreementApprovalFilter>("approved");
   const [reviewingAgreementId, setReviewingAgreementId] = useState<string | null>(null);
+  const [selectedApprovalYear, setSelectedApprovalYear] = useState("all");
+  const [selectedApprovalBuildingId, setSelectedApprovalBuildingId] = useState("");
   const [tenantTab, setTenantTab] = useState<TenantTab>("kyc");
   const [tenantShareLink, setTenantShareLink] = useState<{ tenantId: string; url: string } | null>(null);
   const [tenantShareError, setTenantShareError] = useState<{ tenantId: string; message: string } | null>(null);
   const [tenantShareBusy, setTenantShareBusy] = useState(false);
   const [tenantShareCopiedFor, setTenantShareCopiedFor] = useState<string | null>(null);
-  const selectionScope = `${selectedModule}:${selectedAgreementYear ?? "all"}`;
+  const [selectedTenantBuildingId, setSelectedTenantBuildingId] = useState("");
+  const [selectedAssetBuildingId, setSelectedAssetBuildingId] = useState("");
+  const [selectedAgreementBuildingId, setSelectedAgreementBuildingId] = useState("");
+  const selectionScope = `${selectedModule}:${selectedAgreementYear ?? "all"}:${selectedAgreementBuildingId}:${selectedAssetBuildingId}:${selectedTenantBuildingId}`;
   const selectedRecordIds =
     recordSelection.scope === selectionScope ? recordSelection.ids : [];
 
@@ -257,6 +304,7 @@ export default function OwnerDashboard() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Unable to load your portfolio.");
       setPortfolio({
+        owner: payload.owner ?? null,
         companies: payload.companies ?? [],
         buildings: payload.buildings ?? [],
         assets: payload.assets ?? [],
@@ -277,6 +325,68 @@ export default function OwnerDashboard() {
     const timer = window.setTimeout(() => void loadPortfolio(), 0);
     return () => window.clearTimeout(timer);
   }, [loadPortfolio]);
+
+  useEffect(() => {
+    setSelectedAgreementBuildingId("");
+  }, [selectedAgreementYear]);
+
+  useEffect(() => {
+    if (selectedModule !== "companies" || companySection !== "owner") return;
+    let cancelled = false;
+    async function loadOwnerDetails() {
+      setOwnerDetailsLoading(true);
+      setOwnerDetailsError("");
+      try {
+        const response = await fetch("/api/owner/profile", { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Unable to load owner details.");
+        if (!cancelled) {
+          setOwnerDetails({
+            fullName: payload.profile.fullName ?? "",
+            mobileNumber: payload.profile.mobileNumber ?? "",
+            email: payload.profile.email ?? "",
+            aadhaarNumber: payload.profile.aadhaarNumber ?? "",
+            fullAddress: payload.profile.fullAddress ?? "",
+            addressLine1: payload.profile.addressLine1 ?? "",
+            addressLine2: payload.profile.addressLine2 ?? "",
+            district: payload.profile.district ?? "",
+            state: payload.profile.state ?? "",
+            city: payload.profile.city ?? "",
+            postalCode: payload.profile.postalCode ?? "",
+            fatherName: payload.profile.fatherName ?? "",
+          });
+        }
+      } catch (cause) {
+        if (!cancelled) setOwnerDetailsError(cause instanceof Error ? cause.message : "Unable to load owner details.");
+      } finally {
+        if (!cancelled) setOwnerDetailsLoading(false);
+      }
+    }
+    void loadOwnerDetails();
+    return () => { cancelled = true; };
+  }, [selectedModule, companySection]);
+
+  async function saveOwnerDetails(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setOwnerDetailsSaving(true);
+    setOwnerDetailsError("");
+    setOwnerDetailsMessage("");
+    try {
+      const response = await fetch("/api/owner/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(ownerDetails),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to save owner details.");
+      setOwnerDetailsMessage("Owner details saved for rental agreements.");
+      await loadPortfolio();
+    } catch (cause) {
+      setOwnerDetailsError(cause instanceof Error ? cause.message : "Unable to save owner details.");
+    } finally {
+      setOwnerDetailsSaving(false);
+    }
+  }
 
   async function createTenantShareLink(tenantId: string) {
     setTenantShareBusy(true);
@@ -362,7 +472,6 @@ export default function OwnerDashboard() {
             buildingId: portfolio.buildings.length === 1 ? portfolio.buildings[0].id : "",
             agreementDurationUnit: "MONTH",
             agreementDurationValue: "11",
-            agreementStartDate: getLocalDateInputValue(),
           }
         : kind === "tenant" && portfolio.assets.length === 1
         ? {
@@ -385,7 +494,6 @@ export default function OwnerDashboard() {
       body.monthlyRent = Number(form.monthlyRent);
       body.securityDeposit = Number(form.securityDeposit || "0");
       body.agreementDurationValue = Number(form.agreementDurationValue || "11");
-      body.agreementStartDate = form.agreementStartDate || getLocalDateInputValue();
     }
     if (formKind === "agreement") {
       const asset = portfolio.assets.find((entry) => entry.id === form.assetId);
@@ -500,19 +608,43 @@ export default function OwnerDashboard() {
       actionLabel: "Add tenant",
       formKind: "tenant" as const,
       empty: "No tenants yet.",
-      columns: ["Tenant", "Phone", "Assigned assets", "Agreements"],
-      rows: portfolio.tenants.map((tenant) => ({
-        key: tenant.id,
-        cells: [
-          { value: tenant.fullName, className: "font-semibold text-[#203328]" },
-          { value: tenant.mobileNumber ? `+${tenant.mobileNumber}` : "Phone not provided" },
-          { value: tenant.assetIds.map((assetId) => {
-            const asset = portfolio.assets.find((entry) => entry.id === assetId);
-            return asset ? asset.unitNumber : null;
-          }).filter(Boolean).join(", ") || "None" },
-          { value: String(portfolio.agreements.filter((agreement) => agreement.tenantId === tenant.id).length) },
-        ],
-      })),
+      columns: ["Tenant", "Phone", "Assigned assets", "Total advance", "Agreements"],
+      rows: portfolio.tenants.map((tenant) => {
+        const approvedTenantAgreements = portfolio.agreements.filter(
+          (agreement) =>
+            agreement.tenantId === tenant.id &&
+            agreement.status !== "DRAFT" &&
+            agreement.ownerApprovedAt !== null &&
+            agreement.ownerApprovedAt !== undefined,
+        );
+        const latestApprovedYear = approvedTenantAgreements.reduce(
+          (latest, agreement) => Math.max(latest, Number(getAgreementYear(agreement.startDate))),
+          0,
+        );
+        const latestByAsset = new Map<string, Agreement>();
+        approvedTenantAgreements
+          .filter((agreement) => Number(getAgreementYear(agreement.startDate)) === latestApprovedYear)
+          .forEach((agreement) => {
+            const current = latestByAsset.get(agreement.assetId);
+            const agreementTime = agreement.ownerApprovedAt ? new Date(agreement.ownerApprovedAt).getTime() : 0;
+            const currentTime = current?.ownerApprovedAt ? new Date(current.ownerApprovedAt).getTime() : 0;
+            if (!current || agreementTime >= currentTime) latestByAsset.set(agreement.assetId, agreement);
+          });
+        const totalAdvance = [...latestByAsset.values()].reduce(
+          (total, agreement) => total + (agreement.securityDeposit ?? 0),
+          0,
+        );
+        return {
+          key: tenant.id,
+          cells: [
+            { value: tenant.fullName, className: "font-semibold text-[#203328]" },
+            { value: tenant.mobileNumber ? `+${tenant.mobileNumber}` : "Phone not provided" },
+            { value: String(portfolio.assets.filter((asset) => tenant.assetIds.includes(asset.id)).length) },
+            { value: `₹${totalAdvance.toLocaleString("en-IN")}`, className: "font-semibold text-[#234b34]" },
+            { value: String(portfolio.agreements.filter((agreement) => agreement.tenantId === tenant.id).length) },
+          ],
+        };
+      }),
     },
     agreements: {
       title: "Agreements",
@@ -525,9 +657,11 @@ export default function OwnerDashboard() {
         const asset = portfolio.assets.find((entry) => entry.id === agreement.assetId);
         const status: AgreementStatus | null = agreement.status === "DRAFT"
           ? agreement.ownerApprovedAt ? "Owner approved" : "Awaiting owner approval"
-          : agreement.ownerApprovedAt
+          : isAgreementApproved(agreement)
             ? "Approved"
-            : getAgreementStatus(agreement.endDate);
+            : !agreement.mandatoryDetailsApprovedAt
+              ? "Awaiting owner approval"
+              : getAgreementStatus(agreement.endDate);
         return {
           key: agreement.id,
           cells: [
@@ -574,14 +708,62 @@ export default function OwnerDashboard() {
     },
   }[selectedModule];
   const pendingOwnerApprovals = portfolio.agreements.filter(
-    (agreement) => agreement.status === "DRAFT",
+    (agreement) => agreement.status === "DRAFT" ||
+      (agreement.status === "ACTIVE" && !agreement.mandatoryDetailsApprovedAt),
+  );
+  const approvalYears = [...new Set(
+    pendingOwnerApprovals.map((agreement) => getAgreementYear(agreement.startDate)),
+  )].sort((left, right) => Number(right) - Number(left));
+  const approvalBuildings = selectedApprovalYear === "all" ? [] : portfolio.buildings.flatMap((building) => {
+    const count = pendingOwnerApprovals.filter((agreement) => {
+      if (getAgreementYear(agreement.startDate) !== selectedApprovalYear) return false;
+      return portfolio.assets.some((asset) => asset.id === agreement.assetId && asset.buildingId === building.id);
+    }).length;
+    return count ? [{ ...building, approvalCount: count }] : [];
+  });
+  const visibleOwnerApprovals = pendingOwnerApprovals.filter(
+    (agreement) => (selectedApprovalYear === "all" ||
+      getAgreementYear(agreement.startDate) === selectedApprovalYear) &&
+      (!selectedApprovalBuildingId || portfolio.assets.some(
+        (asset) => asset.id === agreement.assetId && asset.buildingId === selectedApprovalBuildingId,
+      )),
   );
   const agreementYears = [...new Set(
     portfolio.agreements.map((agreement) => getAgreementYear(agreement.startDate)),
   )].sort((left, right) => Number(right) - Number(left));
+  const agreementYearRows =
+    selectedModule === "agreements" && selectedAgreementYear !== null
+      ? selectedDetail.rows.filter((row) => {
+          if (row.cells[0]?.value !== selectedAgreementYear) return false;
+          if (!selectedAgreementBuildingId) return true;
+          const agreement = portfolio.agreements.find((entry) => entry.id === row.key);
+          const asset = portfolio.assets.find((entry) => entry.id === agreement?.assetId);
+          return asset?.buildingId === selectedAgreementBuildingId;
+        })
+      : [];
+  const approvedAgreementCount = agreementYearRows.filter((row) => {
+    const agreement = portfolio.agreements.find((entry) => entry.id === row.key);
+    return agreement ? isAgreementApproved(agreement) : false;
+  }).length;
   const displayRows =
     selectedModule === "agreements" && selectedAgreementYear !== null
-      ? selectedDetail.rows.filter((row) => row.cells[0]?.value === selectedAgreementYear)
+      ? agreementYearRows.filter((row) => {
+          const agreement = portfolio.agreements.find((entry) => entry.id === row.key);
+          return agreement
+            ? isAgreementApproved(agreement) === (agreementApprovalFilter === "approved")
+            : false;
+        })
+      : selectedModule === "assets" && selectedAssetBuildingId
+        ? selectedDetail.rows.filter((row) =>
+            portfolio.assets.find((asset) => asset.id === row.key)?.buildingId === selectedAssetBuildingId,
+          )
+        : selectedModule === "tenants" && selectedTenantBuildingId
+          ? selectedDetail.rows.filter((row) => {
+              const tenant = portfolio.tenants.find((entry) => entry.id === row.key);
+              return Boolean(tenant?.assetIds.some((assetId) =>
+                portfolio.assets.some((asset) => asset.id === assetId && asset.buildingId === selectedTenantBuildingId),
+              ));
+            })
       : selectedDetail.rows;
   const visibleRecordIds = displayRows.map((row) => row.key);
   const allVisibleRecordsSelected =
@@ -673,6 +855,40 @@ export default function OwnerDashboard() {
     setReviewingAgreementId(agreementId);
   }
 
+  async function downloadAgreementDocument(
+    agreementId: string,
+    agreementNumber: string,
+    format: "pdf" | "word",
+  ) {
+    const documentLabel = format === "pdf" ? "agreement PDF" : "agreement Word document";
+    try {
+      const response = await fetch(
+        `/api/owner/agreements/${encodeURIComponent(agreementId)}/${format}`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) {
+        if (format === "word") {
+          const result = await response.json() as { error?: string };
+          throw new Error(result?.error ?? `Unable to download the ${documentLabel}.`);
+        }
+        throw new Error(`Unable to download the ${documentLabel}.`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `${agreementNumber.replace(/[^A-Za-z0-9_-]/g, "") || "rental-agreement"}.${format === "word" ? "docx" : "pdf"}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (downloadError) {
+      console.error(`Unable to download ${documentLabel}.`, downloadError);
+      window.alert(downloadError instanceof Error ? downloadError.message : `Unable to download the ${documentLabel}.`);
+    }
+  }
+
   function handleEditRecord(recordId: string) {
     setRecordEditMode(false);
     syncModuleUrl(selectedModule, recordId);
@@ -696,7 +912,6 @@ export default function OwnerDashboard() {
           ksrbId: asset.ksrbId ?? "",
           agreementDurationUnit: asset.agreementDurationUnit,
           agreementDurationValue: String(asset.agreementDurationValue),
-          agreementStartDate: asset.agreementStartDate?.slice(0, 10) ?? "",
         });
         setAssetEditError("");
       }
@@ -710,13 +925,21 @@ export default function OwnerDashboard() {
         city: selectedBuilding.city,
         state: selectedBuilding.state,
         postalCode: selectedBuilding.postalCode,
+        panchayat: selectedBuilding.panchayat ?? "",
       });
     } else if (selectedModule === "tenants" && selectedTenant) {
       setRecordEditForm({
         fullName: selectedTenant.fullName,
         mobileNumber: selectedTenant.mobileNumber ?? "",
         businessName: selectedTenant.businessName ?? "",
+        businessNature: selectedTenant.businessNature ?? "",
         fullAddress: selectedTenant.fullAddress ?? "",
+        addressLine1: selectedTenant.addressLine1 ?? "",
+        addressLine2: selectedTenant.addressLine2 ?? "",
+        district: selectedTenant.district ?? "",
+        state: selectedTenant.state ?? "",
+        city: selectedTenant.city ?? "",
+        postalCode: selectedTenant.postalCode ?? "",
         aadhaarNumber: selectedTenant.aadhaarNumber ?? "",
         fatherName: selectedTenant.fatherName ?? "",
         email: selectedTenant.email ?? "",
@@ -970,15 +1193,16 @@ export default function OwnerDashboard() {
 
   return (
     <div className="min-h-screen bg-[#f4f6f3] text-[#16251d]">
-      <aside className={`fixed inset-y-0 left-0 z-30 flex w-[258px] flex-col bg-[#123d2c] text-white transition-transform duration-200 lg:translate-x-0 ${mobileMenu ? "translate-x-0" : "-translate-x-full"}`}>
-        <div className="flex h-[76px] items-center justify-between border-b border-white/10 px-6">
-          <a href="/owner/dashboard" className="flex items-center gap-3">
-            <span className="grid size-9 place-items-center rounded-xl bg-[#e5f0e7] text-[#176b4b]"><Building2 size={19} /></span>
-            <span className="text-[18px] font-bold tracking-[-0.06em]">rent<span className="text-[#9bd0ad]">sync</span></span>
+      <aside className={`fixed inset-y-0 left-0 z-30 flex w-[258px] flex-col bg-[#123d2c] text-white transition-all duration-200 lg:translate-x-0 ${sidebarExpanded ? "lg:w-[258px]" : "lg:w-[72px]"} ${mobileMenu ? "translate-x-0" : "-translate-x-full"}`}>
+        <div className={`flex h-[76px] items-center border-b border-white/10 ${sidebarExpanded ? "justify-between px-6" : "justify-center px-3"}`}>
+          <a href="/owner/dashboard" className="flex items-center gap-3" aria-label="Rent Sync dashboard">
+            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#e5f0e7] text-[#176b4b]"><Building2 size={19} /></span>
+            {sidebarExpanded ? <span className="text-[18px] font-bold tracking-[-0.06em]">rent<span className="text-[#9bd0ad]">sync</span></span> : null}
           </a>
-          <button type="button" aria-label="Close menu" onClick={() => setMobileMenu(false)} className="lg:hidden"><X size={18} /></button>
+          {sidebarExpanded ? <button type="button" aria-label="Collapse menu" onClick={() => setSidebarExpanded(false)} className="hidden lg:grid size-8 place-items-center rounded-lg text-white/70 hover:bg-white/10"><X size={18} /></button> : null}
+          <button type="button" aria-label="Close menu" onClick={() => { setMobileMenu(false); setSidebarExpanded(false); }} className="lg:hidden"><X size={18} /></button>
         </div>
-        <nav className="mt-6 flex-1 px-4">
+        <nav className={`mt-6 flex-1 ${sidebarExpanded ? "px-4" : "px-3"}`} >
           {[
             { key: "companies", label: "Companies", icon: Building2 },
             { key: "buildings", label: "Buildings", icon: Home },
@@ -992,33 +1216,40 @@ export default function OwnerDashboard() {
               key={key}
               type="button"
               onClick={() => handleSelectModule(key as ModuleKey)}
-              className={`mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-[12px] font-medium transition ${!approvalModule && selectedModule === key ? "bg-[#e9f3eb] text-[#154b34]" : "text-white/70 hover:bg-white/[0.07] hover:text-white"}`}
+              title={label}
+              aria-label={label}
+              className={`mt-2 flex w-full items-center rounded-xl py-3 text-[12px] font-medium transition ${sidebarExpanded ? "gap-3 px-3 text-left" : "justify-center px-0 text-center"} ${!approvalModule && selectedModule === key ? "bg-[#e9f3eb] text-[#154b34]" : "text-white/70 hover:bg-white/[0.07] hover:text-white"}`}
             >
-              <Icon size={16} /> {label}
+              <Icon size={16} /> {sidebarExpanded ? label : null}
             </button>
           ))}
           {pendingOwnerApprovals.length > 0 ? (
             <button
               type="button"
               onClick={openApprovalQueue}
-              className={`mt-2 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-[12px] font-medium transition ${approvalModule ? "bg-[#e9f3eb] text-[#154b34]" : "text-white/70 hover:bg-white/[0.07] hover:text-white"}`}
+              title="Approve agreements"
+              aria-label="Approve agreements"
+              className={`mt-2 flex w-full items-center rounded-xl py-3 text-[12px] font-medium transition ${sidebarExpanded ? "gap-3 px-3 text-left" : "justify-center px-0 text-center"} ${approvalModule ? "bg-[#e9f3eb] text-[#154b34]" : "text-white/70 hover:bg-white/[0.07] hover:text-white"}`}
             >
-              <FileText size={16} /> Approve agreements
-              <span className="ml-auto rounded-full bg-white/15 px-2 py-0.5 text-[9px]">{pendingOwnerApprovals.length}</span>
+              <FileText size={16} /> {sidebarExpanded ? "Approve agreements" : null}
+              {sidebarExpanded ? <span className="ml-auto rounded-full bg-white/15 px-2 py-0.5 text-[9px]">{pendingOwnerApprovals.length}</span> : null}
             </button>
           ) : null}
         </nav>
         <div className="border-t border-white/10 p-4">
-          <a href="/owner/profile" onClick={() => setMobileMenu(false)} className="mb-2 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-[11px] text-white/65 transition hover:bg-white/[0.07] hover:text-white"><UserRound size={15} /> Profile</a>
+          <a href="/owner/profile" onClick={() => setMobileMenu(false)} title="Profile" aria-label="Profile" className={`mb-2 flex w-full items-center rounded-xl py-2.5 text-[11px] text-white/65 transition hover:bg-white/[0.07] hover:text-white ${sidebarExpanded ? "gap-3 px-3" : "justify-center px-0"}`}><UserRound size={15} /> {sidebarExpanded ? "Profile" : null}</a>
         </div>
       </aside>
 
-      {mobileMenu ? <button type="button" aria-label="Close sidebar" onClick={() => setMobileMenu(false)} className="fixed inset-0 z-20 bg-black/30 lg:hidden" /> : null}
+      {mobileMenu ? <button type="button" aria-label="Close sidebar" onClick={() => { setMobileMenu(false); setSidebarExpanded(false); }} className="fixed inset-0 z-20 bg-black/30 lg:hidden" /> : null}
 
-      <div className="min-h-screen lg:pl-[258px]">
-        <header className="sticky top-0 z-10 flex h-[70px] items-center justify-between border-b border-[#e6ebe6] bg-white/90 px-5 backdrop-blur-md sm:px-8 lg:px-10">
+      <div className={`min-h-screen transition-[padding] duration-200 ${sidebarExpanded ? "lg:pl-[258px]" : "lg:pl-[72px]"}`}>
+        <header className="sticky top-0 z-10 flex h-[64px] items-center justify-between border-b border-[#e6ebe6] bg-white/90 px-4 backdrop-blur-md sm:px-5 lg:px-6">
           <div className="flex items-center gap-3">
-            <button type="button" aria-label="Open menu" onClick={() => setMobileMenu(true)} className="grid size-9 place-items-center rounded-lg border border-[#e4eae5] text-[#53675a] lg:hidden"><Menu size={17} /></button>
+            <button type="button" aria-label={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"} onClick={() => {
+              if (window.matchMedia("(min-width: 1024px)").matches) setSidebarExpanded((current) => !current);
+              else { setSidebarExpanded(true); setMobileMenu(true); }
+            }} className="grid size-9 place-items-center rounded-lg border border-[#e4eae5] text-[#53675a]"><Menu size={17} /></button>
             <h1 className="text-[16px] font-semibold tracking-[-0.03em] text-[#1b2c22]">Your property portfolio</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -1026,7 +1257,7 @@ export default function OwnerDashboard() {
           </div>
         </header>
 
-        <main className="mx-auto max-w-[1450px] px-5 py-7 sm:px-8 sm:py-9 lg:px-10">
+        <main className="w-full px-2 py-3 sm:px-3 sm:py-4 lg:px-4">
           {deleteError ? (
             <p role="alert" className="mb-5 rounded-xl border border-[#f1d9ce] bg-[#fff8f4] px-4 py-3 text-[12px] leading-5 text-[#995634]">
               {deleteError}
@@ -1036,11 +1267,55 @@ export default function OwnerDashboard() {
             <section className="rounded-2xl border border-[#e7ece7] bg-white shadow-[0_4px_20px_-12px_rgba(28,53,37,0.12)]">
               <div className="border-b border-[#edf0ed] px-5 py-5 sm:px-6">
                 <h2 className="text-[20px] font-semibold text-[#203328]">Approve agreements</h2>
-                <p className="mt-1 text-[11px] text-[#819087]">Review each draft through KYC, Rent, Expiry, Advance, Terms and Important Terms before approving it.</p>
+                <p className="mt-1 text-[11px] text-[#819087]">Complete mandatory owner, tenant, property and unit details, then review rent, expiry, advance and terms. Existing agreements also appear here until they are re-approved.</p>
+                {selectedApprovalYear !== "all" ? (
+                  <div role="tablist" aria-label={`${selectedApprovalYear} approval buildings`} className="mt-4 flex gap-2 overflow-x-auto">
+                    {approvalBuildings.map((building) => (
+                      <button
+                        key={building.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={selectedApprovalBuildingId === building.id}
+                        onClick={() => setSelectedApprovalBuildingId((current) => current === building.id ? "" : building.id)}
+                        className={`shrink-0 rounded-lg px-3 py-2 text-[10px] font-semibold ${selectedApprovalBuildingId === building.id ? "bg-[#176b4b] text-white" : "border border-[#dfe8e1] bg-white text-[#355942]"}`}
+                      >
+                        {building.name} ({building.approvalCount})
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
-              {pendingOwnerApprovals.length ? (
+              {selectedApprovalYear === "all" && approvalYears.length ? (
+                <div aria-label="Approval agreement years" className="grid gap-3 p-5 sm:grid-cols-2 sm:p-6 lg:grid-cols-3">
+                  {approvalYears.map((year) => {
+                    const count = pendingOwnerApprovals.filter(
+                      (agreement) => getAgreementYear(agreement.startDate) === year,
+                    ).length;
+                    return (
+                      <button
+                        key={year}
+                        type="button"
+                        onClick={() => {
+                          setSelectedApprovalYear(year);
+                          setSelectedApprovalBuildingId("");
+                        }}
+                        className="group flex min-h-28 items-center justify-between rounded-2xl border border-[#e3eae4] bg-gradient-to-br from-white to-[#f7faf7] p-5 text-left shadow-[0_4px_20px_-16px_rgba(28,53,37,0.2)] transition hover:-translate-y-0.5 hover:border-[#b9d6c3] hover:shadow-md sm:p-6"
+                      >
+                        <span>
+                          <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-[#849188]">Approval year</span>
+                          <span className="mt-2 block text-[26px] font-semibold tracking-[-0.04em] text-[#176b4b]">{year}</span>
+                        </span>
+                        <span className="rounded-full bg-[#eaf3ec] px-3 py-1.5 text-[11px] font-semibold text-[#315b41] group-hover:bg-[#dcebe0]">
+                          {count} {count === 1 ? "agreement" : "agreements"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {selectedApprovalYear !== "all" && visibleOwnerApprovals.length ? (
                 <div className="divide-y divide-[#f0f2f0]">
-                  {pendingOwnerApprovals.map((agreement) => {
+                  {visibleOwnerApprovals.map((agreement) => {
                     const tenant = portfolio.tenants.find((entry) => entry.id === agreement.tenantId);
                     const asset = portfolio.assets.find((entry) => entry.id === agreement.assetId);
                     const building = asset
@@ -1052,16 +1327,40 @@ export default function OwnerDashboard() {
                           <h3 className="text-[12px] font-semibold text-[#294034]">{tenant?.fullName ?? "Tenant"} · {agreement.agreementNumber}</h3>
                           <p className="mt-1 text-[10px] text-[#79867e]">{asset ? `${asset.name} · ${asset.unitNumber}` : "Property"}{building ? ` · ${building.name}` : ""} · ₹{agreement.monthlyRent.toLocaleString("en-IN")}/month</p>
                         </div>
-                        <button type="button" onClick={() => openAgreementReview(agreement.id)} className="h-9 rounded-lg bg-[#176b4b] px-4 text-[10px] font-semibold text-white hover:bg-[#10583c]">
-                          Review agreement
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              aria-label={`Download PDF for ${agreement.agreementNumber}`}
+                              title="Download agreement PDF"
+                              onClick={() => void downloadAgreementDocument(agreement.id, agreement.agreementNumber, "pdf")}
+                              className="inline-flex size-8 items-center justify-center rounded-lg border border-[#dfe9e1] bg-white text-[#286244] transition hover:bg-[#eff6f0] focus:outline-none focus:ring-2 focus:ring-[#8cbd9b]"
+                            >
+                              <FileDown size={15} />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Download Word document for ${agreement.agreementNumber}`}
+                              title="Download agreement Word document"
+                              onClick={() => void downloadAgreementDocument(agreement.id, agreement.agreementNumber, "word")}
+                              className="inline-flex size-8 items-center justify-center rounded-lg border border-[#dfe9e1] bg-white text-[#286244] transition hover:bg-[#eff6f0] focus:outline-none focus:ring-2 focus:ring-[#8cbd9b]"
+                            >
+                              <FileText size={15} />
+                            </button>
+                          </div>
+                          <button type="button" onClick={() => openAgreementReview(agreement.id)} className="h-9 rounded-lg bg-[#176b4b] px-4 text-[10px] font-semibold text-white hover:bg-[#10583c]">
+                            {agreement.status === "ACTIVE" ? "Re-review & approve" : "Review agreement"}
+                          </button>
+                        </div>
                       </article>
                     );
                   })}
                 </div>
-              ) : (
-                <p className="px-5 py-8 text-[12px] text-[#849188]">There are no draft agreements awaiting owner approval.</p>
-              )}
+              ) : selectedApprovalYear !== "all" ? (
+                <p className="px-5 py-8 text-[12px] text-[#849188]">There are no agreements awaiting approval for {selectedApprovalYear}.</p>
+              ) : !approvalYears.length ? (
+                <p className="px-5 py-8 text-[12px] text-[#849188]">There are no agreements awaiting owner approval.</p>
+              ) : null}
             </section>
           ) : selectedModule === "terms" ? (
             <OwnerTermsManager
@@ -1128,9 +1427,9 @@ export default function OwnerDashboard() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {selectedAgreement.status === "DRAFT" ? (
-                    <button type="button" onClick={() => openAgreementReview(selectedAgreement.id)} className="rounded-lg border border-[#dfe8e1] bg-[#f7faf7] px-3 py-2 text-[10px] font-semibold text-[#355942]">Review & approve</button>
-                  ) : null}
+                  <button type="button" onClick={() => openAgreementReview(selectedAgreement.id)} className="rounded-lg border border-[#dfe8e1] bg-[#f7faf7] px-3 py-2 text-[10px] font-semibold text-[#355942]">
+                    {selectedAgreement.status === "DRAFT" ? "Review & approve" : "Edit & re-approve"}
+                  </button>
                   <button type="button" onClick={() => void handleDeleteRecord(selectedAgreement.id)} disabled={deletingRecordId !== null} className="rounded-lg border border-[#f0d9d2] bg-[#fff8f7] px-3 py-2 text-[10px] font-semibold text-[#9a4a3d] disabled:cursor-not-allowed disabled:opacity-60">Archive</button>
                   <button
                     type="button"
@@ -1227,23 +1526,23 @@ export default function OwnerDashboard() {
                   </>
                 ) : null}
                 {agreementTab === "important-terms" ? (
-                  <div className="sm:col-span-2 space-y-5">
-                    <TabPanelHeading title="Important terms" description="Terms marked as important obligations, plus any additional key conditions recorded for this rental." />
-                    {selectedAgreement.templateTerms?.flatMap((template) => template.items).filter((item) => item.importantObligation).length ? (
-                      <section className="rounded-xl border border-[#f1dfb4] bg-[#fffaf0] p-4">
-                        <h3 className="text-[12px] font-semibold text-[#805b13]">Marked important obligations</h3>
-                        <ol className="mt-3 list-decimal space-y-2 pl-5 text-[11px] leading-5 text-[#53675a]">
-                          {selectedAgreement.templateTerms.flatMap((template) => template.items).map((item, index) => ({ ...item, serialNumber: index + 1 })).filter((item) => item.importantObligation).map((item) => (
-                            <li key={item.id}>{item.text}</li>
-                          ))}
+                  <div className="sm:col-span-2">
+                    {(() => {
+                      const mappedImportantTerms = selectedAgreement.templateTerms?.flatMap((template) => template.items)
+                        .filter((item) => item.importantObligation)
+                        .map((item) => item.text.trim())
+                        .filter(Boolean) ?? [];
+                      const additionalImportantTerms = (selectedAgreement.importantTerms ?? "")
+                        .split(/\r?\n/)
+                        .map((term) => term.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
+                        .filter(Boolean);
+                      const importantTerms = [...mappedImportantTerms, ...additionalImportantTerms];
+                      return importantTerms.length ? (
+                        <ol className="list-decimal space-y-2 pl-5 text-[11px] leading-5 text-[#53675a]">
+                          {importantTerms.map((term, index) => <li key={`${index}-${term}`}>{term}</li>)}
                         </ol>
-                      </section>
-                    ) : <PanelMessage>No mapped terms have been marked as important obligations.</PanelMessage>}
-                    {selectedAgreement.importantTerms ? (
-                      <DetailField label="Additional important terms" value={selectedAgreement.importantTerms} />
-                    ) : (
-                      <PanelMessage>No additional important terms have been recorded for this agreement.</PanelMessage>
-                    )}
+                      ) : null;
+                    })()}
                   </div>
                 ) : null}
               </div>
@@ -1341,7 +1640,8 @@ export default function OwnerDashboard() {
                     {selectedTenant.photoDataUrl ? <Image src={selectedTenant.photoDataUrl} alt={`${selectedTenant.fullName} tenant profile`} width={112} height={112} unoptimized className="size-28 rounded-xl object-cover" /> : null}
                     <DetailField label="Tenant name" value={selectedTenant.fullName} />
                     <DetailField label="Business name" value={selectedTenant.businessName || "—"} />
-                    <DetailField label="Full address" value={selectedTenant.fullAddress || "—"} />
+                    <DetailField label="Business nature" value={selectedTenant.businessNature || "—"} />
+                    <DetailField label="Address" value={formatPartyAddress(selectedTenant) || selectedTenant.fullAddress || "—"} />
                     <DetailField label="Mobile number" value={selectedTenant.mobileNumber ? `+${selectedTenant.mobileNumber}` : "—"} />
                     <DetailField label="Aadhaar number" value={selectedTenant.aadhaarNumber || "—"} />
                     <DetailField label="Father's name" value={selectedTenant.fatherName || "—"} />
@@ -1448,7 +1748,7 @@ export default function OwnerDashboard() {
                 <DetailField label="Room number" value={selectedAsset.roomNumber || "—"} />
                 <DetailField label="Ward number" value={selectedAsset.ward || "—"} />
                 <DetailField label="K-SMART building ID" value={selectedAsset.ksmartBuildingId || "—"} />
-                <DetailField label="KSRB ID" value={selectedAsset.ksrbId || "—"} />
+                <DetailField label="KSEB ID" value={selectedAsset.ksrbId || "—"} />
                 <DetailField label="Rent / month" value={`₹${selectedAsset.monthlyRent.toLocaleString("en-IN")}`} />
                 <DetailField label="Advance" value={`₹${selectedAsset.securityDeposit.toLocaleString("en-IN")}`} />
                 <DetailField label="Current tenant" value={selectedAssetTenant?.fullName ?? "Vacant"} />
@@ -1500,6 +1800,7 @@ export default function OwnerDashboard() {
                     <SelectField label="Company" name="companyId" value={recordEditForm.companyId ?? ""} options={portfolio.companies.map((company) => [company.id, company.name])} setForm={setRecordEditForm} />
                     <TextField label="Building name" name="name" value={recordEditForm.name ?? ""} placeholder="Building name" setForm={setRecordEditForm} />
                     <TextField label="Street address" name="address" value={recordEditForm.address ?? ""} placeholder="Street address" setForm={setRecordEditForm} />
+                    <TextField label="Panchayat" name="panchayat" value={recordEditForm.panchayat ?? ""} placeholder="Panchayat" required={false} setForm={setRecordEditForm} />
                     <div className="grid grid-cols-2 gap-3">
                       <TextField label="City" name="city" value={recordEditForm.city ?? ""} placeholder="City" setForm={setRecordEditForm} />
                       <TextField label="State" name="state" value={recordEditForm.state ?? ""} placeholder="State" setForm={setRecordEditForm} />
@@ -1528,10 +1829,9 @@ export default function OwnerDashboard() {
                       <TextField label="Ward (optional)" name="ward" value={assetEditForm.ward ?? ""} placeholder="Ward" required={false} setForm={setAssetEditForm} />
                       <TextField label="Room number (optional)" name="roomNumber" value={assetEditForm.roomNumber ?? ""} placeholder="Room number" required={false} setForm={setAssetEditForm} />
                       <TextField label="K-SMART building ID (optional)" name="ksmartBuildingId" value={assetEditForm.ksmartBuildingId ?? ""} placeholder="K-SMART ID" required={false} setForm={setAssetEditForm} />
-                      <TextField label="KSRB ID (optional)" name="ksrbId" value={assetEditForm.ksrbId ?? ""} placeholder="KSRB ID" required={false} setForm={setAssetEditForm} />
+                                            <TextField label="KSEB ID (optional)" name="ksrbId" value={assetEditForm.ksrbId ?? ""} placeholder="KSEB ID" required={false} setForm={setAssetEditForm} />
                       <SelectField label="Agreement duration unit" name="agreementDurationUnit" value={assetEditForm.agreementDurationUnit ?? "MONTH"} options={[["MONTH", "Months"], ["YEAR", "Years"]]} setForm={setAssetEditForm} />
                       <TextField label={`Agreement duration (${assetEditForm.agreementDurationUnit === "YEAR" ? "years" : "months"})`} name="agreementDurationValue" value={assetEditForm.agreementDurationValue ?? "11"} type="number" placeholder="11" setForm={setAssetEditForm} />
-                      <TextField label="Agreement start date" name="agreementStartDate" value={assetEditForm.agreementStartDate ?? ""} type="date" placeholder="" setForm={setAssetEditForm} />
                     </div>
                   </>
                 ) : null}
@@ -1539,7 +1839,14 @@ export default function OwnerDashboard() {
                   <>
                     <TextField label="Tenant name" name="fullName" value={recordEditForm.fullName ?? ""} placeholder="Tenant name" setForm={setRecordEditForm} />
                     <TextField label="Business name (optional)" name="businessName" value={recordEditForm.businessName ?? ""} placeholder="Business or employer" required={false} setForm={setRecordEditForm} />
-                    <TextField label="Full address (optional)" name="fullAddress" value={recordEditForm.fullAddress ?? ""} placeholder="Tenant full address" required={false} setForm={setRecordEditForm} />
+                    <TextField label="Business nature (optional)" name="businessNature" value={recordEditForm.businessNature ?? ""} placeholder="e.g. Retail, Office, Warehouse" required={false} setForm={setRecordEditForm} />
+                    <div className="sm:col-span-2">
+                      <PartyAddressInputs
+                        idPrefix="tenant-edit-address"
+                        values={recordEditForm}
+                        onChange={(field, value) => setRecordEditForm((current) => ({ ...current, [field]: value }))}
+                      />
+                    </div>
                     <TextField label="Mobile number (optional)" name="mobileNumber" value={recordEditForm.mobileNumber ?? ""} placeholder="Mobile number" type="tel" required={false} setForm={setRecordEditForm} />
                     <div className="grid grid-cols-2 gap-3">
                       <TextField label="Aadhaar number (optional)" name="aadhaarNumber" value={recordEditForm.aadhaarNumber ?? ""} placeholder="Aadhaar number" required={false} setForm={setRecordEditForm} />
@@ -1595,8 +1902,8 @@ export default function OwnerDashboard() {
               </div>
             </div>
           ) : (
-            <div className="rounded-2xl border border-[#e7ece7] bg-white shadow-[0_4px_20px_-12px_rgba(28,53,37,0.12)]">
-              <div className="flex flex-col justify-between gap-3 border-b border-[#edf0ed] px-5 py-4 sm:flex-row sm:items-center sm:px-6">
+            <div className="rounded-xl border border-[#e7ece7] bg-white shadow-[0_4px_20px_-12px_rgba(28,53,37,0.12)]">
+              <div className="flex flex-col justify-between gap-2 border-b border-[#edf0ed] px-4 py-3 sm:flex-row sm:items-center sm:px-5">
                 <h2 className="text-[20px] font-semibold tracking-[-0.04em] text-[#17271e]">{selectedDetail.title}</h2>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   {selectedVisibleRecordIds.length > 0 ? (
@@ -1623,6 +1930,108 @@ export default function OwnerDashboard() {
                   ) : null}
                 </div>
               </div>
+
+              {selectedModule === "companies" && !loading && !error && (
+                <div className="flex gap-2 border-b border-[#edf0ed] bg-[#fbfcfb] px-4 py-2.5 sm:px-5">
+                  <button type="button" onClick={() => setCompanySection("owner")} className={`rounded-lg px-3 py-1.5 text-[10px] font-semibold ${companySection === "owner" ? "bg-[#176b4b] text-white" : "border border-[#dfe8e1] bg-white text-[#355942]"}`}>Owner Details</button>
+                  <button type="button" onClick={() => setCompanySection("company")} className={`rounded-lg px-3 py-1.5 text-[10px] font-semibold ${companySection === "company" ? "bg-[#176b4b] text-white" : "border border-[#dfe8e1] bg-white text-[#355942]"}`}>Company Details</button>
+                </div>
+              )}
+
+              {selectedModule === "agreements" && selectedAgreementYear !== null && !loading && !error && (
+                <div className="flex gap-2 overflow-x-auto border-b border-[#edf0ed] bg-[#fbfcfb] px-4 py-2.5">
+                  {portfolio.buildings.map((building) => {
+                    const agreementCount = portfolio.agreements.filter((agreement) => {
+                      if (getAgreementYear(agreement.startDate) !== selectedAgreementYear) return false;
+                      const asset = portfolio.assets.find((entry) => entry.id === agreement.assetId);
+                      return asset?.buildingId === building.id;
+                    }).length;
+                    return (
+                      <button
+                        key={building.id}
+                        type="button"
+                        onClick={() => setSelectedAgreementBuildingId((current) => current === building.id ? "" : building.id)}
+                        className={`shrink-0 rounded-lg px-3 py-1.5 text-[10px] font-semibold transition ${selectedAgreementBuildingId === building.id ? "bg-[#176b4b] text-white" : "border border-[#dfe8e1] bg-white text-[#355942] hover:bg-[#eff5f0]"}`}
+                      >
+                        {building.name}
+                        <span className={selectedAgreementBuildingId === building.id ? "ml-1 opacity-80" : "ml-1 text-[#849188]"}>({agreementCount})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {selectedModule === "assets" && !loading && !error && (
+                <div className="flex gap-2 overflow-x-auto border-b border-[#edf0ed] bg-[#fbfcfb] px-4 py-2.5">
+                  {portfolio.buildings.map((building) => {
+                    const assetCount = portfolio.assets.filter((asset) => asset.buildingId === building.id).length;
+                    return (
+                      <button
+                        key={building.id}
+                        type="button"
+                        aria-pressed={selectedAssetBuildingId === building.id}
+                        onClick={() => setSelectedAssetBuildingId((current) => current === building.id ? "" : building.id)}
+                        className={`shrink-0 rounded-lg px-3 py-1.5 text-[10px] font-semibold transition ${selectedAssetBuildingId === building.id ? "bg-[#176b4b] text-white" : "border border-[#dfe8e1] bg-white text-[#355942] hover:bg-[#eff5f0]"}`}
+                      >
+                        {building.name} <span className={selectedAssetBuildingId === building.id ? "opacity-80" : "text-[#849188]"}>({assetCount})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {selectedModule === "tenants" && !loading && !error && (
+                <div className="flex gap-2 overflow-x-auto border-b border-[#edf0ed] bg-[#fbfcfb] px-4 py-2.5">
+                  {portfolio.buildings.map((building) => {
+                    const tenantCount = portfolio.tenants.filter((tenant) => tenant.assetIds.some((assetId) =>
+                      portfolio.assets.some((asset) => asset.id === assetId && asset.buildingId === building.id),
+                    )).length;
+                    return (
+                      <button
+                        key={building.id}
+                        type="button"
+                        aria-pressed={selectedTenantBuildingId === building.id}
+                        onClick={() => setSelectedTenantBuildingId((current) => current === building.id ? "" : building.id)}
+                        className={`shrink-0 rounded-lg px-3 py-1.5 text-[10px] font-semibold transition ${selectedTenantBuildingId === building.id ? "bg-[#176b4b] text-white" : "border border-[#dfe8e1] bg-white text-[#355942] hover:bg-[#eff5f0]"}`}
+                      >
+                        {building.name} <span className={selectedTenantBuildingId === building.id ? "opacity-80" : "text-[#849188]"}>({tenantCount})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {selectedModule === "companies" && companySection === "owner" && !loading && !error && (
+                <form onSubmit={(event) => void saveOwnerDetails(event)} className="grid gap-4 p-5 sm:grid-cols-2 sm:p-6">
+                  <label className="text-[10px] font-semibold text-[#465a4c]">Owner full name *
+                    <input required maxLength={120} value={ownerDetails.fullName ?? ""} onChange={(event) => setOwnerDetails((current) => ({ ...current, fullName: event.target.value }))} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] px-3 text-[11px]" />
+                  </label>
+                  <label className="text-[10px] font-semibold text-[#465a4c]">Mobile number *
+                    <input readOnly value={ownerDetails.mobileNumber ?? ""} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] bg-[#f4f6f4] px-3 text-[11px]" />
+                  </label>
+                  <label className="text-[10px] font-semibold text-[#465a4c]">Aadhaar number
+                    <input inputMode="numeric" maxLength={12} value={ownerDetails.aadhaarNumber ?? ""} onChange={(event) => setOwnerDetails((current) => ({ ...current, aadhaarNumber: event.target.value.replace(/[^0-9]/g, "") }))} placeholder="12-digit Aadhaar" className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] px-3 text-[11px]" />
+                  </label>
+                  <label className="text-[10px] font-semibold text-[#465a4c]">Father / Guardian name
+                    <input maxLength={120} value={ownerDetails.fatherName ?? ""} onChange={(event) => setOwnerDetails((current) => ({ ...current, fatherName: event.target.value }))} className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] px-3 text-[11px]" />
+                  </label>
+                  <div className="sm:col-span-2">
+                    <PartyAddressInputs
+                      idPrefix="owner-address"
+                      values={ownerDetails}
+                      onChange={(field, value) => setOwnerDetails((current) => ({ ...current, [field]: value }))}
+                    />
+                  </div>
+                  <label className="text-[10px] font-semibold text-[#465a4c] sm:col-span-2">Email address
+                    <input type="email" maxLength={254} value={ownerDetails.email ?? ""} onChange={(event) => setOwnerDetails((current) => ({ ...current, email: event.target.value }))} placeholder="owner@example.com" className="mt-1.5 h-10 w-full rounded-lg border border-[#e4eae5] px-3 text-[11px]" />
+                  </label>
+                  {ownerDetailsError && <p role="alert" className="sm:col-span-2 rounded-lg bg-[#fff4ed] px-3 py-2 text-[11px] text-[#995634]">{ownerDetailsError}</p>}
+                  {ownerDetailsMessage && <p className="sm:col-span-2 rounded-lg bg-[#edf7ef] px-3 py-2 text-[11px] text-[#315b41]">{ownerDetailsMessage}</p>}
+                  <div className="flex justify-end sm:col-span-2">
+                    <button type="submit" disabled={ownerDetailsSaving || ownerDetailsLoading} className="h-10 rounded-lg bg-[#176b4b] px-4 text-[11px] font-semibold text-white disabled:opacity-60">{ownerDetailsSaving ? "Saving..." : "Save owner details"}</button>
+                  </div>
+                </form>
+              )}
 
               {selectedModule === "buildings" && !loading && !error && (
                 <div className="grid gap-4 border-b border-[#edf0ed] bg-[#fbfcfb] p-5 sm:grid-cols-2 sm:p-6">
@@ -1681,11 +2090,33 @@ export default function OwnerDashboard() {
                 ) : (
                   <p className="px-5 py-7 text-[13px] text-[#849188]">{selectedDetail.empty}</p>
                 )
+              ) : selectedModule === "companies" && companySection === "owner" ? (
+                null
               ) : (
                 <>
                   {selectedModule === "agreements" && selectedAgreementYear !== null && (
-                    <div className="border-b border-[#edf0ed] bg-[#fbfcfb] px-5 py-3 sm:px-6">
+                    <div className="flex flex-col justify-between gap-3 border-b border-[#edf0ed] bg-[#fbfcfb] px-5 py-3 sm:flex-row sm:items-center sm:px-6">
                       <p className="text-[12px] font-semibold text-[#315b41]">{selectedAgreementYear} agreements</p>
+                      <div role="tablist" aria-label="Filter agreements by approval status" className="flex gap-2">
+                        {([
+                          ["approved", "Approved", approvedAgreementCount],
+                          ["not-approved", "Not approved", agreementYearRows.length - approvedAgreementCount],
+                        ] as const).map(([filter, label, count]) => (
+                          <button
+                            key={filter}
+                            type="button"
+                            role="tab"
+                            aria-selected={agreementApprovalFilter === filter}
+                            onClick={() => {
+                              setAgreementApprovalFilter(filter);
+                              setRecordSelection({ scope: selectionScope, ids: [] });
+                            }}
+                            className={`rounded-lg px-3 py-1.5 text-[10px] font-semibold transition ${agreementApprovalFilter === filter ? "bg-[#176b4b] text-white" : "border border-[#dfe8e1] bg-white text-[#355942] hover:bg-[#eff5f0]"}`}
+                          >
+                            {label} <span className={agreementApprovalFilter === filter ? "ml-1 opacity-80" : "ml-1 text-[#849188]"}>({count})</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
                   {displayRows.length ? (
@@ -1740,16 +2171,34 @@ export default function OwnerDashboard() {
                               {row.cells.map((cell, index) => (
                                 <td key={`${row.key}-${selectedDetail.columns[index]}`} className={`px-5 py-4 ${cell.className ?? ""}`}>
                                   {selectedModule === "agreements" && index === row.cells.length - 1 ? (
-                                    <a
-                                      href={`/api/owner/agreements/${encodeURIComponent(row.key)}/pdf`}
-                                      download
-                                      aria-label={`Download PDF for ${portfolio.agreements.find((agreement) => agreement.id === row.key)?.agreementNumber ?? "agreement"}`}
-                                      title="Download agreement PDF"
-                                      onClick={(event) => event.stopPropagation()}
-                                      className="inline-flex size-8 items-center justify-center rounded-lg border border-[#dfe9e1] bg-white text-[#286244] transition hover:bg-[#eff6f0] focus:outline-none focus:ring-2 focus:ring-[#8cbd9b]"
-                                    >
-                                      <FileDown size={15} />
-                                    </a>
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        aria-label={`Download PDF for ${portfolio.agreements.find((agreement) => agreement.id === row.key)?.agreementNumber ?? "agreement"}`}
+                                        title="Download agreement PDF"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          const agreement = portfolio.agreements.find((entry) => entry.id === row.key);
+                                          if (agreement) void downloadAgreementDocument(agreement.id, agreement.agreementNumber, "pdf");
+                                        }}
+                                        className="inline-flex size-8 items-center justify-center rounded-lg border border-[#dfe9e1] bg-white text-[#286244] transition hover:bg-[#eff6f0] focus:outline-none focus:ring-2 focus:ring-[#8cbd9b]"
+                                      >
+                                        <FileDown size={15} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        aria-label={`Download Word document for ${portfolio.agreements.find((agreement) => agreement.id === row.key)?.agreementNumber ?? "agreement"}`}
+                                        title="Download agreement Word document"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          const agreement = portfolio.agreements.find((entry) => entry.id === row.key);
+                                          if (agreement) void downloadAgreementDocument(agreement.id, agreement.agreementNumber, "word");
+                                        }}
+                                        className="inline-flex size-8 items-center justify-center rounded-lg border border-[#dfe9e1] bg-white text-[#286244] transition hover:bg-[#eff6f0] focus:outline-none focus:ring-2 focus:ring-[#8cbd9b]"
+                                      >
+                                        <FileText size={15} />
+                                      </button>
+                                    </div>
                                   ) : cell.badge
                                     ? <AgreementStatusBadge status={cell.status ?? null} />
                                     : cell.value}
@@ -1784,6 +2233,7 @@ export default function OwnerDashboard() {
                 <SelectField label="Company" name="companyId" value={form.companyId ?? ""} options={portfolio.companies.map((entry) => [entry.id, entry.name])} setForm={setForm} />
                 <TextField label="Building name" name="name" value={form.name ?? ""} placeholder="e.g. Greenview Residency" setForm={setForm} />
                 <TextField label="Street address" name="address" value={form.address ?? ""} placeholder="Door number and street" setForm={setForm} />
+                <TextField label="Panchayat" name="panchayat" value={form.panchayat ?? ""} placeholder="Panchayat" required={false} setForm={setForm} />
                 <div className="mt-3 grid grid-cols-2 gap-3"><TextField label="City" name="city" value={form.city ?? ""} placeholder="City" setForm={setForm} /><TextField label="State" name="state" value={form.state ?? ""} placeholder="State" setForm={setForm} /></div>
                 <TextField label="PIN code" name="postalCode" value={form.postalCode ?? ""} placeholder="PIN code" setForm={setForm} />
               </>}
@@ -1791,11 +2241,10 @@ export default function OwnerDashboard() {
                 <SelectField label="Building" name="buildingId" value={form.buildingId ?? ""} options={portfolio.buildings.map((entry) => [entry.id, entry.name])} setForm={setForm} />
                 <div className="mt-3 grid grid-cols-2 gap-3"><TextField label="Asset name" name="name" value={form.name ?? ""} placeholder="Apartment 3B" setForm={setForm} /><TextField label="Unit number" name="unitNumber" value={form.unitNumber ?? ""} placeholder="3B" setForm={setForm} /></div>
                 <TextField label="Asset type" name="assetType" value={form.assetType ?? ""} placeholder="Apartment, room, shop..." setForm={setForm} />
-                <div className="mt-3 grid grid-cols-2 gap-3"><TextField label="Room number (optional)" name="roomNumber" value={form.roomNumber ?? ""} placeholder="Room number" required={false} setForm={setForm} /><TextField label="Ward number (optional)" name="ward" value={form.ward ?? ""} placeholder="Ward number" required={false} setForm={setForm} /><TextField label="K-SMART building ID (optional)" name="ksmartBuildingId" value={form.ksmartBuildingId ?? ""} placeholder="K-SMART ID" required={false} setForm={setForm} /><TextField label="KSRB ID (optional)" name="ksrbId" value={form.ksrbId ?? ""} placeholder="KSRB ID" required={false} setForm={setForm} /><TextField label="Monthly rent (₹)" name="monthlyRent" value={form.monthlyRent ?? ""} placeholder="15000" type="number" setForm={setForm} /><TextField label="Security deposit (₹)" name="securityDeposit" value={form.securityDeposit ?? ""} placeholder="30000" type="number" setForm={setForm} /></div>
+                <div className="mt-3 grid grid-cols-2 gap-3"><TextField label="Room number (optional)" name="roomNumber" value={form.roomNumber ?? ""} placeholder="Room number" required={false} setForm={setForm} /><TextField label="Ward number (optional)" name="ward" value={form.ward ?? ""} placeholder="Ward number" required={false} setForm={setForm} /><TextField label="K-SMART building ID (optional)" name="ksmartBuildingId" value={form.ksmartBuildingId ?? ""} placeholder="K-SMART ID" required={false} setForm={setForm} /><TextField label="KSEB ID (optional)" name="ksrbId" value={form.ksrbId ?? ""} placeholder="KSEB ID" required={false} setForm={setForm} /><TextField label="Monthly rent (₹)" name="monthlyRent" value={form.monthlyRent ?? ""} placeholder="15000" type="number" setForm={setForm} /><TextField label="Security deposit (₹)" name="securityDeposit" value={form.securityDeposit ?? ""} placeholder="30000" type="number" setForm={setForm} /></div>
                 <div className="mt-3 grid grid-cols-2 gap-3">
                   <SelectField label="Agreement duration unit" name="agreementDurationUnit" value={form.agreementDurationUnit ?? "MONTH"} options={[["MONTH", "Months"], ["YEAR", "Years"]]} setForm={setForm} />
                   <TextField label={`Duration (${form.agreementDurationUnit === "YEAR" ? "years" : "months"})`} name="agreementDurationValue" value={form.agreementDurationValue ?? "11"} type="number" placeholder="11" setForm={setForm} />
-                  <TextField label="Agreement start date" name="agreementStartDate" value={form.agreementStartDate ?? getLocalDateInputValue()} type="date" placeholder="" setForm={setForm} />
                 </div>
               </>}
               {formKind === "tenant" && <>
@@ -1803,7 +2252,12 @@ export default function OwnerDashboard() {
                 <TextField label="Tenant full name" name="fullName" value={form.fullName ?? ""} placeholder="Tenant's full name" setForm={setForm} />
                 <TextField label="Tenant mobile (optional)" name="mobileNumber" value={form.mobileNumber ?? ""} placeholder="919876543210" type="tel" required={false} setForm={setForm} />
                 <TextField label="Business name (optional)" name="businessName" value={form.businessName ?? ""} placeholder="Business or employer" required={false} setForm={setForm} />
-                <TextField label="Full address (optional)" name="fullAddress" value={form.fullAddress ?? ""} placeholder="Tenant's full address" required={false} setForm={setForm} />
+                <TextField label="Business nature (optional)" name="businessNature" value={form.businessNature ?? ""} placeholder="e.g. Retail, Office, Warehouse" required={false} setForm={setForm} />
+                <PartyAddressInputs
+                  idPrefix="tenant-create-address"
+                  values={form}
+                  onChange={(field, value) => setForm((current) => ({ ...current, [field]: value }))}
+                />
                 <div className="grid grid-cols-2 gap-3">
                   <TextField label="Aadhaar number (optional)" name="aadhaarNumber" value={form.aadhaarNumber ?? ""} placeholder="Aadhaar number" required={false} setForm={setForm} />
                   <TextField label="Father's name (optional)" name="fatherName" value={form.fatherName ?? ""} placeholder="Father's name" required={false} setForm={setForm} />
@@ -1855,10 +2309,19 @@ export default function OwnerDashboard() {
         if (!agreement) return null;
         const tenant = portfolio.tenants.find((entry) => entry.id === agreement.tenantId);
         const asset = portfolio.assets.find((entry) => entry.id === agreement.assetId);
+        const building = asset ? portfolio.buildings.find((entry) => entry.id === asset.buildingId) : null;
         return (
           <AgreementApprovalWizard
             agreement={agreement as ReviewableAgreement}
             party="OWNER"
+            owner={portfolio.owner}
+            tenant={tenant ?? null}
+            property={asset && building ? {
+              ...building,
+              ward: asset.ward,
+              roomNumber: asset.roomNumber,
+              unitNumber: asset.unitNumber,
+            } : null}
             tenantName={tenant?.fullName ?? "Tenant not found"}
             tenantMobile={tenant?.mobileNumber ?? null}
             propertyName={asset ? `${asset.name} · ${asset.unitNumber}` : "Property not found"}

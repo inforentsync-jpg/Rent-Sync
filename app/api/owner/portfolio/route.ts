@@ -21,6 +21,7 @@ import { getOwnerSession } from "@/lib/session";
 import { hasValidElevenMonthTerm } from "@/lib/rental-agreement";
 import { getRenewalAgreementTerm } from "@/lib/agreement-year";
 import { shouldUseDatabase } from "@/lib/storage-mode";
+import { formatPartyAddress, PARTY_ADDRESS_LIMITS } from "@/lib/party-address";
 import {
   addAgreementDuration,
   DEFAULT_AGREEMENT_DURATION_UNIT,
@@ -84,8 +85,7 @@ function agreementSettings(input: PortfolioInput) {
     !unit ||
     typeof value !== "number" ||
     !isValidAgreementDuration(value, unit) ||
-    startDate === undefined ||
-    (startDate !== null && !isValidIsoDate(startDate))
+    (startDate !== undefined && startDate !== null && !isValidIsoDate(startDate))
   ) {
     return null;
   }
@@ -230,13 +230,24 @@ export async function GET() {
         city: building.city,
         state: building.state,
         postalCode: building.postalCode,
+        panchayat: building.panchayat ?? null,
         ownerId: building.ownerId,
         ownerName: building.ownerName,
         ownerMobile: building.ownerMobile,
         createdAt: building.createdAt,
         updatedAt: building.updatedAt,
       })),
-      assets: assets.map((asset) => ({
+      assets: assets.map((asset) => {
+        const latestApprovedAgreement = [...asset.agreements]
+          .filter((agreement) => agreement.status !== "DRAFT" && agreement.ownerApprovedAt !== null)
+          .sort((left, right) => {
+            const yearDifference = right.agreementYear - left.agreementYear;
+            if (yearDifference !== 0) return yearDifference;
+            const leftApproved = left.ownerApprovedAt ? new Date(left.ownerApprovedAt).getTime() : 0;
+            const rightApproved = right.ownerApprovedAt ? new Date(right.ownerApprovedAt).getTime() : 0;
+            return rightApproved - leftApproved;
+          })[0];
+        return {
         id: asset.id,
         buildingId: asset.buildingId,
         buildingName: buildings.find((building) => building.id === asset.buildingId)?.name ?? "",
@@ -245,7 +256,7 @@ export async function GET() {
         unitNumber: asset.unitNumber,
         roomNumber: asset.roomNumber ?? null,
         monthlyRent: asset.monthlyRent,
-        securityDeposit: asset.securityDeposit,
+        securityDeposit: latestApprovedAgreement?.securityDeposit ?? asset.securityDeposit,
         externalBuildingId: asset.externalBuildingId ?? null,
         ward: asset.ward ?? null,
         agreementDurationUnit: asset.agreementDurationUnit,
@@ -256,7 +267,8 @@ export async function GET() {
         templateIds: asset.termTemplates.map(({ id }) => id),
         createdAt: asset.createdAt,
         updatedAt: asset.updatedAt,
-      })),
+        };
+      }),
       tenants,
       agreements,
       deletedAgreements: deletedAgreements.map(({ templateTerms, ...agreement }) => ({
@@ -470,15 +482,18 @@ export async function POST(request: Request) {
         const city = text(body, "city", 100);
         const state = text(body, "state", 100);
         const postalCode = text(body, "postalCode", 12);
+        const panchayat = optionalText(body, "panchayat", 120);
         if (!companyId || !name || !address || !city || !state || !postalCode) {
           return NextResponse.json({ error: "Complete all building fields." }, { status: 400 });
         }
+        if (panchayat === undefined) return NextResponse.json({ error: "Check the building panchayat." }, { status: 400 });
         const building = await createDevOwnerBuilding(session.mobileNumber, companyId, {
           name,
           address,
           city,
           state,
           postalCode,
+          panchayat,
         });
         return NextResponse.json({ building }, { status: 201 });
       }
@@ -506,10 +521,9 @@ export async function POST(request: Request) {
           roomNumber === undefined ||
           ksmartBuildingId === undefined ||
           ksrbId === undefined ||
-          !settings ||
-          !settings.startDate
+          !settings
         ) {
-          return NextResponse.json({ error: "Complete asset details and provide a valid agreement duration and start date." }, { status: 400 });
+          return NextResponse.json({ error: "Complete asset details and provide valid rent, deposit, and agreement duration." }, { status: 400 });
         }
         const asset = await createDevAsset(session.mobileNumber, {
           buildingId,
@@ -520,7 +534,7 @@ export async function POST(request: Request) {
           securityDeposit,
           agreementDurationUnit: settings.unit,
           agreementDurationValue: settings.value,
-          agreementStartDate: settings.startDate,
+          agreementStartDate: settings.startDate ?? null,
           externalBuildingId,
           ward,
           roomNumber,
@@ -536,7 +550,15 @@ export async function POST(request: Request) {
         const mobileNumber = rawMobile?.replace(/\D/g, "");
         const startDate = text(body, "startDate", 10);
         const businessName = optionalText(body, "businessName", 160);
-        const fullAddress = optionalText(body, "fullAddress", 2000);
+        const businessNature = optionalText(body, "businessNature", 160);
+        const addressLine1 = optionalText(body, "addressLine1", PARTY_ADDRESS_LIMITS.addressLine1);
+        const addressLine2 = optionalText(body, "addressLine2", PARTY_ADDRESS_LIMITS.addressLine2);
+        const district = optionalText(body, "district", PARTY_ADDRESS_LIMITS.district);
+        const state = optionalText(body, "state", PARTY_ADDRESS_LIMITS.state);
+        const city = optionalText(body, "city", PARTY_ADDRESS_LIMITS.city);
+        const postalCode = optionalText(body, "postalCode", PARTY_ADDRESS_LIMITS.postalCode);
+        const legacyFullAddress = optionalText(body, "fullAddress", 2000);
+        const fullAddress = formatPartyAddress({ addressLine1, addressLine2, district, state, city, postalCode }) || legacyFullAddress;
         const aadhaarNumber = optionalText(body, "aadhaarNumber", 20);
         const fatherName = optionalText(body, "fatherName", 120);
         const email = optionalText(body, "email", 254);
@@ -546,7 +568,9 @@ export async function POST(request: Request) {
           (mobileNumber && !/^\d{10,15}$/.test(mobileNumber))) {
           return NextResponse.json({ error: "Enter a tenant name. To create an agreement, select both an asset and a valid start date. If provided, the mobile number must be valid." }, { status: 400 });
         }
-        if (businessName === undefined || fullAddress === undefined || aadhaarNumber === undefined ||
+        if (businessName === undefined || businessNature === undefined || addressLine1 === undefined || addressLine2 === undefined ||
+          district === undefined || state === undefined || city === undefined || postalCode === undefined ||
+          legacyFullAddress === undefined || aadhaarNumber === undefined ||
           fatherName === undefined || email === undefined || photo === undefined ||
           (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
           return NextResponse.json({ error: "Check the optional tenant KYC details and photo." }, { status: 400 });
@@ -557,7 +581,15 @@ export async function POST(request: Request) {
           fullName,
           mobileNumber ?? null,
           startDate,
-          { businessName, fullAddress, aadhaarNumber, fatherName, email, photoDataUrl: photo },
+          {
+            businessName, businessNature, fullAddress: fullAddress ?? null, aadhaarNumber, fatherName, email, photoDataUrl: photo,
+            addressLine1: addressLine1 ?? null,
+            addressLine2: addressLine2 ?? null,
+            district: district ?? null,
+            state: state ?? null,
+            city: city ?? null,
+            postalCode: postalCode ?? null,
+          },
         );
         return NextResponse.json({ tenant }, { status: 201 });
       }
@@ -589,9 +621,11 @@ export async function POST(request: Request) {
       const city = text(body, "city", 100);
       const state = text(body, "state", 100);
       const postalCode = text(body, "postalCode", 12);
+      const panchayat = optionalText(body, "panchayat", 120);
       if (!companyId || !name || !address || !city || !state || !postalCode) {
         return NextResponse.json({ error: "Complete all building fields." }, { status: 400 });
       }
+      if (panchayat === undefined) return NextResponse.json({ error: "Check the building panchayat." }, { status: 400 });
       const company = await prisma.company.findFirst({ where: { id: companyId, ownerId: owner.id } });
       if (!company) return NextResponse.json({ error: "Company not found in your account." }, { status: 404 });
       const building = await prisma.building.create({
@@ -601,6 +635,7 @@ export async function POST(request: Request) {
           city,
           state,
           postalCode,
+          panchayat,
           ownerId: owner.id,
           ownerName: (await prisma.propertyOwner.findUniqueOrThrow({ where: { id: owner.id }, select: { fullName: true } })).fullName,
           ownerMobile: session.mobileNumber,
@@ -625,8 +660,8 @@ export async function POST(request: Request) {
       if (!buildingId || !name || !assetType || !unitNumber || monthlyRent === null || securityDeposit === null ||
         ward === undefined ||
         roomNumber === undefined || ksmartBuildingId === undefined || ksrbId === undefined ||
-        !settings || !settings.startDate) {
-        return NextResponse.json({ error: "Complete asset details and provide a valid agreement duration and start date." }, { status: 400 });
+        !settings) {
+        return NextResponse.json({ error: "Complete asset details and provide valid rent, deposit, and agreement duration." }, { status: 400 });
       }
       const building = await prisma.building.findFirst({ where: { id: buildingId, ownerId: owner.id } });
       if (!building) return NextResponse.json({ error: "Building not found in your account." }, { status: 404 });
@@ -635,7 +670,7 @@ export async function POST(request: Request) {
         externalBuildingId, ward, ksmartBuildingId, ksrbId,
         agreementDurationUnit: settings.unit,
         agreementDurationValue: settings.value,
-        agreementStartDate: new Date(`${settings.startDate}T00:00:00.000Z`),
+        agreementStartDate: settings.startDate ? new Date(`${settings.startDate}T00:00:00.000Z`) : null,
       } });
       return NextResponse.json({ asset }, { status: 201 });
     }
@@ -646,7 +681,15 @@ export async function POST(request: Request) {
       const mobileNumber = rawMobile?.replace(/\D/g, "");
       const startDate = text(body, "startDate", 10);
       const businessName = optionalText(body, "businessName", 160);
-      const fullAddress = optionalText(body, "fullAddress", 2000);
+      const businessNature = optionalText(body, "businessNature", 160);
+      const addressLine1 = optionalText(body, "addressLine1", PARTY_ADDRESS_LIMITS.addressLine1);
+      const addressLine2 = optionalText(body, "addressLine2", PARTY_ADDRESS_LIMITS.addressLine2);
+      const district = optionalText(body, "district", PARTY_ADDRESS_LIMITS.district);
+      const state = optionalText(body, "state", PARTY_ADDRESS_LIMITS.state);
+      const city = optionalText(body, "city", PARTY_ADDRESS_LIMITS.city);
+      const postalCode = optionalText(body, "postalCode", PARTY_ADDRESS_LIMITS.postalCode);
+      const legacyFullAddress = optionalText(body, "fullAddress", 2000);
+      const fullAddress = formatPartyAddress({ addressLine1, addressLine2, district, state, city, postalCode }) || legacyFullAddress;
       const aadhaarNumber = optionalText(body, "aadhaarNumber", 20);
       const fatherName = optionalText(body, "fatherName", 120);
       const email = optionalText(body, "email", 254);
@@ -656,7 +699,9 @@ export async function POST(request: Request) {
         (mobileNumber && !/^\d{10,15}$/.test(mobileNumber))) {
         return NextResponse.json({ error: "Enter a tenant name. To create an agreement, select both an asset and a valid start date. If provided, the mobile number must be valid." }, { status: 400 });
       }
-      if (businessName === undefined || fullAddress === undefined || aadhaarNumber === undefined ||
+      if (businessName === undefined || businessNature === undefined || addressLine1 === undefined || addressLine2 === undefined ||
+        district === undefined || state === undefined || city === undefined || postalCode === undefined ||
+        legacyFullAddress === undefined || aadhaarNumber === undefined ||
         fatherName === undefined || email === undefined || photo === undefined ||
         (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
         return NextResponse.json({ error: "Check the optional tenant KYC details and photo." }, { status: 400 });
@@ -671,10 +716,10 @@ export async function POST(request: Request) {
         const tenant = existingTenant
           ? await prisma.tenant.update({
               where: { id: existingTenant.id },
-              data: { fullName, mobileNumber, businessName, fullAddress, aadhaarNumber, fatherName, email, photoDataUrl: photo },
+              data: { fullName, mobileNumber, businessName, businessNature, fullAddress, addressLine1, addressLine2, district, state, city, postalCode, aadhaarNumber, fatherName, email, photoDataUrl: photo },
             })
           : await prisma.tenant.create({
-              data: { ownerId: owner.id, fullName, mobileNumber, businessName, fullAddress, aadhaarNumber, fatherName, email, photoDataUrl: photo },
+              data: { ownerId: owner.id, fullName, mobileNumber, businessName, businessNature, fullAddress, addressLine1, addressLine2, district, state, city, postalCode, aadhaarNumber, fatherName, email, photoDataUrl: photo },
             });
         return NextResponse.json({ tenant }, { status: 201 });
       }
@@ -708,10 +753,10 @@ export async function POST(request: Request) {
         const tenant = existingTenant
           ? await transaction.tenant.update({
               where: { id: existingTenant.id },
-              data: { fullName, businessName, fullAddress, aadhaarNumber, fatherName, email, photoDataUrl: photo },
+              data: { fullName, businessName, businessNature, fullAddress, addressLine1, addressLine2, district, state, city, postalCode, aadhaarNumber, fatherName, email, photoDataUrl: photo },
             })
           : await transaction.tenant.create({
-              data: { ownerId: owner.id, fullName, mobileNumber, businessName, fullAddress, aadhaarNumber, fatherName, email, photoDataUrl: photo },
+              data: { ownerId: owner.id, fullName, mobileNumber, businessName, businessNature, fullAddress, addressLine1, addressLine2, district, state, city, postalCode, aadhaarNumber, fatherName, email, photoDataUrl: photo },
             });
         const existingAgreement = await transaction.rentalAgreement.findFirst({
           where: { assetId, tenantId: tenant.id, agreementYear },
@@ -886,12 +931,8 @@ export async function PATCH(request: Request) {
         },
       });
       if (!agreement) return NextResponse.json({ error: "Agreement not found in your account." }, { status: 404 });
-      if (
-        agreement.status !== "DRAFT" ||
-        agreement.ownerApprovedAt ||
-        agreement.tenantApprovedAt
-      ) {
-        return NextResponse.json({ error: "Only unapproved draft agreements can be edited." }, { status: 409 });
+      if (agreement.status !== "DRAFT" && agreement.status !== "ACTIVE") {
+        return NextResponse.json({ error: "Only draft or active agreements can be edited." }, { status: 409 });
       }
       const updated = await prisma.rentalAgreement.update({
         where: { id },
@@ -903,6 +944,10 @@ export async function PATCH(request: Request) {
           securityDeposit,
           terms,
           importantTerms,
+          status: "DRAFT",
+          ownerApprovedAt: null,
+          tenantApprovedAt: null,
+          mandatoryDetailsApprovedAt: null,
         },
       });
       return NextResponse.json({ agreement: updated });
@@ -930,10 +975,11 @@ export async function PATCH(request: Request) {
       const city = text(body, "city", 100);
       const state = text(body, "state", 100);
       const postalCode = text(body, "postalCode", 12);
-      if (!companyId || !name || !address || !city || !state || !postalCode) {
+      const panchayat = optionalText(body, "panchayat", 120);
+      if (!companyId || !name || !address || !city || !state || !postalCode || panchayat === undefined) {
         return NextResponse.json({ error: "Complete all property fields." }, { status: 400 });
       }
-      Object.assign(input, { companyId, name, address, city, state, postalCode });
+      Object.assign(input, { companyId, name, address, city, state, postalCode, panchayat });
     } else {
       const fullName = text(body, "fullName", 120);
       const rawMobile = body.mobileNumber;
@@ -945,17 +991,30 @@ export async function PATCH(request: Request) {
         return NextResponse.json({ error: "Enter a valid tenant mobile number." }, { status: 400 });
       }
       const businessName = optionalText(body, "businessName", 160);
-      const fullAddress = optionalText(body, "fullAddress", 2000);
+      const businessNature = optionalText(body, "businessNature", 160);
+      const addressLine1 = optionalText(body, "addressLine1", PARTY_ADDRESS_LIMITS.addressLine1);
+      const addressLine2 = optionalText(body, "addressLine2", PARTY_ADDRESS_LIMITS.addressLine2);
+      const district = optionalText(body, "district", PARTY_ADDRESS_LIMITS.district);
+      const state = optionalText(body, "state", PARTY_ADDRESS_LIMITS.state);
+      const city = optionalText(body, "city", PARTY_ADDRESS_LIMITS.city);
+      const postalCode = optionalText(body, "postalCode", PARTY_ADDRESS_LIMITS.postalCode);
+      const legacyFullAddress = optionalText(body, "fullAddress", 2000);
+      const fullAddress = formatPartyAddress({ addressLine1, addressLine2, district, state, city, postalCode }) || legacyFullAddress;
       const aadhaarNumber = optionalText(body, "aadhaarNumber", 20);
       const fatherName = optionalText(body, "fatherName", 120);
       const email = optionalText(body, "email", 254);
       const photo = photoDataUrl(body);
-      if (businessName === undefined || fullAddress === undefined || aadhaarNumber === undefined ||
+      if (businessName === undefined || businessNature === undefined || addressLine1 === undefined || addressLine2 === undefined ||
+        district === undefined || state === undefined || city === undefined || postalCode === undefined ||
+        legacyFullAddress === undefined || aadhaarNumber === undefined ||
         fatherName === undefined || email === undefined || photo === undefined ||
         (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
         return NextResponse.json({ error: "Check the optional tenant KYC details and photo." }, { status: 400 });
       }
-      Object.assign(input, { fullName, mobileNumber: mobileNumber || null, businessName, fullAddress, aadhaarNumber, fatherName, email, photoDataUrl: photo });
+      Object.assign(input, {
+        fullName, mobileNumber: mobileNumber || null, businessName, businessNature, fullAddress, aadhaarNumber, fatherName, email, photoDataUrl: photo,
+        addressLine1, addressLine2, district, state, city, postalCode,
+      });
     }
 
     if (!shouldUseDatabase()) {
@@ -997,6 +1056,7 @@ export async function PATCH(request: Request) {
             city: input.city!,
             state: input.state!,
             postalCode: input.postalCode!,
+            panchayat: input.panchayat,
             ownerName: owner.fullName,
             ownerMobile: session.mobileNumber,
           },
@@ -1016,7 +1076,14 @@ export async function PATCH(request: Request) {
             fullName: input.fullName!,
             mobileNumber: input.mobileNumber,
             businessName: input.businessName,
+            businessNature: input.businessNature,
             fullAddress: input.fullAddress,
+            addressLine1: input.addressLine1,
+            addressLine2: input.addressLine2,
+            district: input.district,
+            state: input.state,
+            city: input.city,
+            postalCode: input.postalCode,
             aadhaarNumber: input.aadhaarNumber,
             fatherName: input.fatherName,
             email: input.email,
@@ -1061,10 +1128,9 @@ export async function PATCH(request: Request) {
     roomNumber === undefined ||
     ksmartBuildingId === undefined ||
     ksrbId === undefined ||
-    !settings ||
-    !settings.startDate
+    !settings
   ) {
-    return NextResponse.json({ error: "Complete all asset fields using valid rent, deposit, duration, and start date." }, { status: 400 });
+    return NextResponse.json({ error: "Complete all asset fields using valid rent, deposit, and duration." }, { status: 400 });
   }
 
   const input = {
@@ -1126,7 +1192,9 @@ export async function PATCH(request: Request) {
       where: { id: assetId },
       data: {
         ...input,
-        agreementStartDate: new Date(`${input.agreementStartDate}T00:00:00.000Z`),
+        agreementStartDate: input.agreementStartDate
+          ? new Date(`${input.agreementStartDate}T00:00:00.000Z`)
+          : null,
       },
     });
     return NextResponse.json({ asset: updatedAsset });

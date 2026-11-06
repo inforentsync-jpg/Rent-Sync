@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/database";
 import { getDevOwnerAgreement } from "@/lib/dev-store";
-import { generateAgreementPdf } from "@/lib/agreement-pdf";
+import { generateAgreementPdf } from "@/lib/agreement-pdf.clean";
 import { getOwnerSession } from "@/lib/session";
 import { shouldUseDatabase } from "@/lib/storage-mode";
 
@@ -25,7 +25,11 @@ export async function GET(
       : await (async () => {
           const owner = await prisma.propertyOwner.findUnique({
             where: { mobileNumber: session.mobileNumber },
-            select: { id: true, fullName: true, mobileNumber: true },
+            select: {
+              id: true, fullName: true, mobileNumber: true, aadhaarNumber: true,
+              fullAddress: true, addressLine1: true, addressLine2: true,
+              district: true, state: true, city: true, postalCode: true, fatherName: true,
+            },
           });
           if (!owner) return null;
           const agreement = await prisma.rentalAgreement.findFirst({
@@ -93,8 +97,25 @@ export async function GET(
       isDraft: agreement.status === "DRAFT",
       ownerName: owner.fullName,
       ownerMobile: owner.mobileNumber,
+      ownerAadhaar: owner.aadhaarNumber ?? null,
+      ownerAddress: owner.fullAddress ?? null,
+      ownerAddressLine1: owner.addressLine1 ?? null,
+      ownerAddressLine2: owner.addressLine2 ?? null,
+      ownerDistrict: owner.district ?? null,
+      ownerState: owner.state ?? null,
+      ownerCity: owner.city ?? null,
+      ownerPostalCode: owner.postalCode ?? null,
+      ownerFatherName: owner.fatherName ?? null,
       tenantName: tenant.fullName,
       tenantMobile: tenant.mobileNumber,
+      tenantAddress: tenant.fullAddress ?? null,
+      tenantAddressLine1: tenant.addressLine1 ?? null,
+      tenantAddressLine2: tenant.addressLine2 ?? null,
+      tenantDistrict: tenant.district ?? null,
+      tenantState: tenant.state ?? null,
+      tenantCity: tenant.city ?? null,
+      tenantPostalCode: tenant.postalCode ?? null,
+      tenantAadhaar: tenant.aadhaarNumber ?? null,
       buildingName: building.name,
       buildingAddress: building.address,
       city: building.city,
@@ -104,6 +125,10 @@ export async function GET(
       unitNumber: asset.unitNumber,
       assetType: asset.assetType,
       ward: asset.ward ?? null,
+      panchayat: building.panchayat ?? null,
+      roomNumber: asset.roomNumber ?? asset.unitNumber,
+      usageDescription: tenant.businessNature ?? null,
+      tradeName: tenant.businessName ?? null,
       templateTerms,
     });
     const safeName = agreement.agreementNumber.replace(/[^A-Za-z0-9_-]/g, "");

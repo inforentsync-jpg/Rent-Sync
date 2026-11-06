@@ -14,6 +14,7 @@ model Building {
   city        String         @db.VarChar(100)
   state       String         @db.VarChar(100)
   postalCode  String         @db.VarChar(12)
+  panchayat   String?        @db.VarChar(120)
   ownerName   String         @db.VarChar(120)
   ownerMobile String         @db.VarChar(15)
   ownerId     String?
@@ -35,6 +36,15 @@ model PropertyOwner {
   fullName      String              @db.VarChar(120)
   mobileNumber  String              @unique @db.VarChar(15)
   email         String?             @db.VarChar(254)
+  aadhaarNumber String?             @db.VarChar(20)
+  fullAddress   String?             @db.VarChar(2000)
+  addressLine1  String?             @db.VarChar(60)
+  addressLine2  String?             @db.VarChar(60)
+  district      String?             @db.VarChar(40)
+  state         String?             @db.VarChar(40)
+  city          String?             @db.VarChar(40)
+  postalCode    String?             @db.VarChar(12)
+  fatherName    String?             @db.VarChar(120)
   passwordHash  String?
   createdAt     DateTime            @default(now())
   updatedAt     DateTime            @updatedAt
@@ -60,29 +70,29 @@ model Company {
 }
 
 model Asset {
-  id                 String                      @id @default(cuid())
-  buildingId         String
-  name               String                      @db.VarChar(120)
-  assetType          String                      @db.VarChar(60)
-  unitNumber         String                      @db.VarChar(40)
-  monthlyRent        Int
-  securityDeposit    Int                         @default(0)
-  agreementDurationUnit  String                  @default("MONTH") @db.VarChar(10)
-  agreementDurationValue Int                    @default(11)
-  agreementStartDate DateTime?                   @db.Date
-  externalBuildingId String?                     @db.VarChar(40)
-  ward               String?                     @db.VarChar(20)
-  roomNumber         String?                     @db.VarChar(40)
-  ksmartBuildingId   String?                     @db.VarChar(60)
-  ksrbId             String?                     @db.VarChar(60)
-  createdAt          DateTime                    @default(now())
-  updatedAt          DateTime                    @updatedAt
-  building           Building                    @relation(fields: [buildingId], references: [id], onDelete: Cascade)
-  tenants            AssetTenant[]
-  agreements         RentalAgreement[]
-  termTemplates      AssetTermTemplate[]
-  renewalDismissals  AgreementRenewalDismissal[]
-  agreementCounter   AgreementCounter?
+  id                     String                      @id @default(cuid())
+  buildingId             String
+  name                   String                      @db.VarChar(120)
+  assetType              String                      @db.VarChar(60)
+  unitNumber             String                      @db.VarChar(40)
+  monthlyRent            Int
+  securityDeposit        Int                         @default(0)
+  agreementDurationUnit  String                      @default("MONTH") @db.VarChar(10)
+  agreementDurationValue Int                         @default(11)
+  agreementStartDate     DateTime?                   @db.Date
+  externalBuildingId     String?                     @db.VarChar(40)
+  ward                   String?                     @db.VarChar(20)
+  roomNumber             String?                     @db.VarChar(40)
+  ksmartBuildingId       String?                     @db.VarChar(60)
+  ksrbId                 String?                     @db.VarChar(60)
+  createdAt              DateTime                    @default(now())
+  updatedAt              DateTime                    @updatedAt
+  building               Building                    @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  tenants                AssetTenant[]
+  agreements             RentalAgreement[]
+  termTemplates          AssetTermTemplate[]
+  renewalDismissals      AgreementRenewalDismissal[]
+  agreementCounter       AgreementCounter?
 
   @@unique([buildingId, unitNumber])
   @@index([buildingId])
@@ -90,25 +100,32 @@ model Asset {
 }
 
 model Tenant {
-  id                String                      @id @default(cuid())
-  ownerId           String
-  fullName          String                      @db.VarChar(120)
-  mobileNumber      String?                     @unique @db.VarChar(15)
-  businessName      String?                     @db.VarChar(160)
-  fullAddress       String?                     @db.Text
-  aadhaarNumber     String?                     @db.VarChar(20)
-  fatherName        String?                     @db.VarChar(120)
-  email             String?                     @db.VarChar(254)
-  photoDataUrl      String?                     @db.Text
-  publicShareTokenHash String?                   @unique
-  publicShareTokenEncrypted String?               @db.Text
-  passwordHash      String?
-  createdAt         DateTime                    @default(now())
-  updatedAt         DateTime                    @updatedAt
-  owner             PropertyOwner               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  assets            AssetTenant[]
-  agreements        RentalAgreement[]
-  renewalDismissals AgreementRenewalDismissal[]
+  id                        String                      @id @default(cuid())
+  ownerId                   String
+  fullName                  String                      @db.VarChar(120)
+  mobileNumber              String?                     @unique @db.VarChar(15)
+  businessName              String?                     @db.VarChar(160)
+  businessNature            String?                     @db.VarChar(160)
+  fullAddress               String?                     @db.Text
+  addressLine1      String?                     @db.VarChar(60)
+  addressLine2      String?                     @db.VarChar(60)
+  district          String?                     @db.VarChar(40)
+  state             String?                     @db.VarChar(40)
+  city              String?                     @db.VarChar(40)
+  postalCode                String?                     @db.VarChar(12)
+  aadhaarNumber             String?                     @db.VarChar(20)
+  fatherName                String?                     @db.VarChar(120)
+  email                     String?                     @db.VarChar(254)
+  photoDataUrl              String?                     @db.Text
+  publicShareTokenHash      String?                     @unique
+  publicShareTokenEncrypted String?                     @db.Text
+  passwordHash              String?
+  createdAt                 DateTime                    @default(now())
+  updatedAt                 DateTime                    @updatedAt
+  owner                     PropertyOwner               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  assets                    AssetTenant[]
+  agreements                RentalAgreement[]
+  renewalDismissals         AgreementRenewalDismissal[]
 
   @@index([ownerId])
   @@map("tenants")
@@ -128,23 +145,24 @@ model AssetTenant {
 }
 
 model RentalAgreement {
-  id               String    @id @default(cuid())
-  agreementNumber  String    @unique @db.VarChar(40)
-  assetId          String
-  tenantId         String
-  agreementYear    Int
-  startDate        DateTime  @db.Date
-  endDate          DateTime  @db.Date
-  monthlyRent      Int
-  securityDeposit  Int       @default(0)
-  terms            String    @db.Text
-  importantTerms   String    @default("") @db.Text
-  status           String    @default("ACTIVE") @db.VarChar(20)
-  ownerApprovedAt  DateTime? @db.Timestamptz(6)
-  tenantApprovedAt DateTime? @db.Timestamptz(6)
-  createdAt        DateTime  @default(now())
-  asset            Asset     @relation(fields: [assetId], references: [id], onDelete: Restrict)
-  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  id                         String    @id @default(cuid())
+  agreementNumber            String    @unique @db.VarChar(40)
+  assetId                    String
+  tenantId                   String
+  agreementYear              Int
+  startDate                  DateTime  @db.Date
+  endDate                    DateTime  @db.Date
+  monthlyRent                Int
+  securityDeposit            Int       @default(0)
+  terms                      String    @db.Text
+  importantTerms             String    @default("") @db.Text
+  status                     String    @default("ACTIVE") @db.VarChar(20)
+  ownerApprovedAt            DateTime? @db.Timestamptz(6)
+  tenantApprovedAt           DateTime? @db.Timestamptz(6)
+  mandatoryDetailsApprovedAt DateTime? @db.Timestamptz(6)
+  createdAt                  DateTime  @default(now())
+  asset                      Asset     @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  tenant                     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
 
   @@unique([tenantId, assetId, agreementYear])
   @@index([assetId, startDate, endDate])
@@ -153,32 +171,32 @@ model RentalAgreement {
 }
 
 model ArchivedRentalAgreement {
-  id                  String   @id @default(cuid())
+  id                  String    @id @default(cuid())
   ownerId             String
-  originalAgreementId String   @unique
-  agreementNumber     String   @db.VarChar(40)
+  originalAgreementId String    @unique
+  agreementNumber     String    @db.VarChar(40)
   agreementYear       Int
-  startDate           DateTime @db.Date
-  endDate             DateTime @db.Date
+  startDate           DateTime  @db.Date
+  endDate             DateTime  @db.Date
   monthlyRent         Int
-  securityDeposit     Int      @default(0)
-  terms               String   @db.Text
-  importantTerms      String   @default("") @db.Text
-  status              String   @db.VarChar(20)
+  securityDeposit     Int       @default(0)
+  terms               String    @db.Text
+  importantTerms      String    @default("") @db.Text
+  status              String    @db.VarChar(20)
   ownerApprovedAt     DateTime? @db.Timestamptz(6)
   tenantApprovedAt    DateTime? @db.Timestamptz(6)
-  tenantName          String   @db.VarChar(120)
-  tenantMobileNumber  String?  @db.VarChar(15)
-  assetName           String   @db.VarChar(120)
-  assetType           String   @db.VarChar(60)
-  unitNumber          String   @db.VarChar(40)
-  buildingName        String   @db.VarChar(160)
-  buildingAddress     String   @db.VarChar(255)
-  city                String   @db.VarChar(100)
-  state               String   @db.VarChar(100)
-  templateTerms       String   @db.Text
+  tenantName          String    @db.VarChar(120)
+  tenantMobileNumber  String?   @db.VarChar(15)
+  assetName           String    @db.VarChar(120)
+  assetType           String    @db.VarChar(60)
+  unitNumber          String    @db.VarChar(40)
+  buildingName        String    @db.VarChar(160)
+  buildingAddress     String    @db.VarChar(255)
+  city                String    @db.VarChar(100)
+  state               String    @db.VarChar(100)
+  templateTerms       String    @db.Text
   createdAt           DateTime
-  archivedAt          DateTime @default(now())
+  archivedAt          DateTime  @default(now())
 
   @@index([ownerId, archivedAt])
   @@map("archived_rental_agreements")
@@ -218,13 +236,13 @@ model OwnerTermTemplate {
 }
 
 model OwnerTermItem {
-  id                   String            @id @default(cuid())
-  templateId           String
-  position             Int
-  text                 String            @db.VarChar(1000)
-  importantObligation  Boolean           @default(false)
-  createdAt            DateTime          @default(now())
-  template             OwnerTermTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  id                  String            @id @default(cuid())
+  templateId          String
+  position            Int
+  text                String            @db.VarChar(1000)
+  importantObligation Boolean           @default(false)
+  createdAt           DateTime          @default(now())
+  template            OwnerTermTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
 
   @@unique([templateId, position])
   @@map("owner_term_items")

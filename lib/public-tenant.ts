@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/database";
+import { formatPartyAddress } from "@/lib/party-address";
 
 export async function getPublicTenantData(token: string) {
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
@@ -11,6 +12,12 @@ export async function getPublicTenantData(token: string) {
       mobileNumber: true,
       businessName: true,
       fullAddress: true,
+      addressLine1: true,
+      addressLine2: true,
+      district: true,
+      state: true,
+      city: true,
+      postalCode: true,
       aadhaarNumber: true,
       fatherName: true,
       email: true,
@@ -84,6 +91,13 @@ export async function getPublicTenantData(token: string) {
       mobileNumber: tenant.mobileNumber,
       businessName: tenant.businessName,
       fullAddress: tenant.fullAddress,
+      addressLine1: tenant.addressLine1,
+      addressLine2: tenant.addressLine2,
+      district: tenant.district,
+      state: tenant.state,
+      city: tenant.city,
+      postalCode: tenant.postalCode,
+      formattedAddress: formatPartyAddress(tenant) || tenant.fullAddress,
       aadhaarNumber: tenant.aadhaarNumber,
       fatherName: tenant.fatherName,
       email: tenant.email,

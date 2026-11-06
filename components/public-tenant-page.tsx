@@ -29,6 +29,13 @@ type PublicTenantData = {
     mobileNumber: string | null;
     businessName: string | null;
     fullAddress: string | null;
+    formattedAddress: string | null;
+    addressLine1: string | null;
+    addressLine2: string | null;
+    district: string | null;
+    state: string | null;
+    city: string | null;
+    postalCode: string | null;
     aadhaarNumber: string | null;
     fatherName: string | null;
     email: string | null;
@@ -173,7 +180,7 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
                 <div className="mt-4 grid gap-2 sm:grid-cols-2">
                   <InfoTile label="Business name" value={data.tenant.businessName || "—"} />
                   <InfoTile label="Mobile number" value={data.tenant.mobileNumber ? `+${data.tenant.mobileNumber}` : "—"} />
-                  <InfoTile label="Full address" value={data.tenant.fullAddress || "—"} />
+                  <InfoTile label="Address" value={data.tenant.formattedAddress || "—"} />
                   <InfoTile label="Aadhaar number" value={data.tenant.aadhaarNumber || "—"} />
                   <InfoTile label="Father's name" value={data.tenant.fatherName || "—"} />
                   <InfoTile label="Email address" value={data.tenant.email || "—"} />
@@ -216,7 +223,7 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
                     <InfoTile label="Room number" value={asset.roomNumber || "—"} />
                     <InfoTile label="Ward number" value={asset.ward || "—"} />
                     <InfoTile label="K-SMART building ID" value={asset.ksmartBuildingId || "—"} />
-                    <InfoTile label="KSRB ID" value={asset.ksrbId || "—"} />
+                    <InfoTile label="KSEB ID" value={asset.ksrbId || "—"} />
                     <InfoTile label="Rent / month" value={`₹${asset.monthlyRent.toLocaleString("en-IN")}`} />
                     <InfoTile label="Security deposit" value={`₹${asset.securityDeposit.toLocaleString("en-IN")}`} />
                   </div>
