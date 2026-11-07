@@ -768,6 +768,20 @@ export function updateDevPortfolioItem(
     if (kind === "company") {
       const company = store.companies.find((entry) => entry.id === id && entry.ownerId === owner.id);
       if (!company) throw new Error("Company not found in your account.");
+      if (company.name !== input.name) {
+        const buildingIds = new Set(
+          store.buildings.filter((building) => building.companyId === company.id).map((building) => building.id),
+        );
+        const assetIds = new Set(
+          store.assets.filter((asset) => buildingIds.has(asset.buildingId)).map((asset) => asset.id),
+        );
+        markDevAgreementsForReview(store, (agreement) =>
+          assetIds.has(agreement.assetId) ||
+          store.agreements.some(
+            (member) => member.mergedIntoAgreementId === agreement.id && assetIds.has(member.assetId),
+          ),
+        );
+      }
       company.name = input.name ?? company.name;
       company.updatedAt = now;
       await writeStore(store);

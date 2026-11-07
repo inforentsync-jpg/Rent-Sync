@@ -914,7 +914,6 @@ export default function OwnerDashboard() {
 
   async function downloadAgreementDocument(
     agreementId: string,
-    agreementNumber: string,
     format: "pdf" | "word",
   ) {
     const documentLabel = format === "pdf" ? "agreement PDF" : "agreement Word document";
@@ -931,11 +930,23 @@ export default function OwnerDashboard() {
         throw new Error(`Unable to download the ${documentLabel}.`);
       }
 
+      const contentDisposition = response.headers.get("Content-Disposition");
+      const encodedFilename = contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      if (!encodedFilename) {
+        throw new Error("The download response did not include a filename.");
+      }
+      let filename: string;
+      try {
+        filename = decodeURIComponent(encodedFilename);
+      } catch {
+        throw new Error("The download response included an invalid filename.");
+      }
+
       const blob = await response.blob();
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = objectUrl;
-      link.download = `${agreementNumber.replace(/[^A-Za-z0-9_-]/g, "") || "rental-agreement"}.${format === "word" ? "docx" : "pdf"}`;
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -1440,7 +1451,7 @@ export default function OwnerDashboard() {
                               type="button"
                               aria-label={`Download PDF for ${agreement.agreementNumber}`}
                               title="Download agreement PDF"
-                              onClick={() => void downloadAgreementDocument(agreement.id, agreement.agreementNumber, "pdf")}
+                              onClick={() => void downloadAgreementDocument(agreement.id, "pdf")}
                               className="inline-flex size-8 items-center justify-center rounded-lg border border-[#dfe9e1] bg-white text-[#286244] transition hover:bg-[#eff6f0] focus:outline-none focus:ring-2 focus:ring-[#8cbd9b]"
                             >
                               <FileDown size={15} />
@@ -1449,7 +1460,7 @@ export default function OwnerDashboard() {
                               type="button"
                               aria-label={`Download Word document for ${agreement.agreementNumber}`}
                               title="Download agreement Word document"
-                              onClick={() => void downloadAgreementDocument(agreement.id, agreement.agreementNumber, "word")}
+                              onClick={() => void downloadAgreementDocument(agreement.id, "word")}
                               className="inline-flex size-8 items-center justify-center rounded-lg border border-[#dfe9e1] bg-white text-[#286244] transition hover:bg-[#eff6f0] focus:outline-none focus:ring-2 focus:ring-[#8cbd9b]"
                             >
                               <FileText size={15} />
@@ -2424,7 +2435,7 @@ export default function OwnerDashboard() {
                                         onClick={(event) => {
                                           event.stopPropagation();
                                           const agreement = portfolio.agreements.find((entry) => entry.id === row.key);
-                                          if (agreement) void downloadAgreementDocument(agreement.id, agreement.agreementNumber, "pdf");
+                                          if (agreement) void downloadAgreementDocument(agreement.id, "pdf");
                                         }}
                                         className="inline-flex size-8 items-center justify-center rounded-lg border border-[#dfe9e1] bg-white text-[#286244] transition hover:bg-[#eff6f0] focus:outline-none focus:ring-2 focus:ring-[#8cbd9b]"
                                       >
@@ -2437,7 +2448,7 @@ export default function OwnerDashboard() {
                                         onClick={(event) => {
                                           event.stopPropagation();
                                           const agreement = portfolio.agreements.find((entry) => entry.id === row.key);
-                                          if (agreement) void downloadAgreementDocument(agreement.id, agreement.agreementNumber, "word");
+                                          if (agreement) void downloadAgreementDocument(agreement.id, "word");
                                         }}
                                         className="inline-flex size-8 items-center justify-center rounded-lg border border-[#dfe9e1] bg-white text-[#286244] transition hover:bg-[#eff6f0] focus:outline-none focus:ring-2 focus:ring-[#8cbd9b]"
                                       >

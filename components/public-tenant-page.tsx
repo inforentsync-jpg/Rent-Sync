@@ -155,7 +155,6 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
                 </button>
                 <a
                   href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(shortcutAgreement.id)}/pdf`}
-                  download
                   aria-label={`Download PDF for agreement ${shortcutAgreement.agreementNumber}`}
                   title="Download agreement PDF"
                   className="grid size-10 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"
@@ -164,7 +163,6 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
                 </a>
                 <a
                   href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(shortcutAgreement.id)}/word`}
-                  download
                   aria-label={`Download Word copy for agreement ${shortcutAgreement.agreementNumber}`}
                   title="Download agreement Word copy"
                   className="grid size-10 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"
@@ -332,7 +330,6 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
                           </button>
                           <a
                             href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(agreement.id)}/pdf`}
-                            download
                             aria-label={`Download PDF for ${agreement.agreementNumber}`}
                             className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#cfe0d3] bg-[#f5faf6] px-4 text-[11px] font-semibold text-[#176b4b] shadow-sm transition hover:border-[#176b4b] hover:bg-[#eaf4ed]"
                           >
@@ -340,7 +337,6 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
                           </a>
                           <a
                             href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(agreement.id)}/word`}
-                            download
                             aria-label={`Download Word document for ${agreement.agreementNumber}`}
                             className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#cfe0d3] bg-[#f5faf6] px-4 text-[11px] font-semibold text-[#176b4b] shadow-sm transition hover:border-[#176b4b] hover:bg-[#eaf4ed]"
                           >

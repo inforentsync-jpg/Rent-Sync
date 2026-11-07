@@ -170,7 +170,12 @@ export async function GET(
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": agreementContentDisposition(
-          agreementDownloadFilename(agreementTenant.fullName, agreement.startDate, "pdf"),
+          agreementDownloadFilename(
+            agreementTenant.fullName,
+            agreementTenant.businessName,
+            agreement.startDate,
+            "pdf",
+          ),
         ),
         "Cache-Control": "private, no-store",
       },

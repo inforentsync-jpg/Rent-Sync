@@ -23,7 +23,7 @@ export async function GET(
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "Content-Disposition": agreementContentDisposition(
-          agreementDownloadFilename(data.tenantName, data.startDate, "docx"),
+          agreementDownloadFilename(data.tenantName, data.tradeName, data.startDate, "docx"),
         ),
         "Cache-Control": "private, no-store",
       },

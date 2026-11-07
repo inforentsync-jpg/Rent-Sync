@@ -1112,11 +1112,28 @@ export async function PATCH(request: Request) {
       if (!owner) return NextResponse.json({ error: "Owner account was not found." }, { status: 404 });
 
       if (kind === "company") {
-        const company = await prisma.company.updateMany({
-          where: { id, ownerId: owner.id },
-          data: { name: input.name! },
+        const company = await prisma.$transaction(async (transaction) => {
+          const current = await transaction.company.findFirst({
+            where: { id, ownerId: owner.id },
+            select: {
+              name: true,
+              buildings: { select: { assets: { select: { id: true } } } },
+            },
+          });
+          if (!current) return false;
+          await transaction.company.update({
+            where: { id },
+            data: { name: input.name! },
+          });
+          if (current.name !== input.name) {
+            await requireAgreementReapprovalForAssets(
+              transaction,
+              current.buildings.flatMap((building) => building.assets.map((asset) => asset.id)),
+            );
+          }
+          return true;
         });
-        if (!company.count) return NextResponse.json({ error: "Company not found in your account." }, { status: 404 });
+        if (!company) return NextResponse.json({ error: "Company not found in your account." }, { status: 404 });
       } else if (kind === "building") {
         const company = await prisma.company.findFirst({
           where: { id: input.companyId!, ownerId: owner.id },

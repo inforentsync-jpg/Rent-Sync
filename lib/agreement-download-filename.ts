@@ -10,12 +10,19 @@ function safeFilenamePart(value: string) {
 
 export function agreementDownloadFilename(
   tenantName: string,
+  tradeName: string | null | undefined,
   startDate: string | Date,
   extension: "pdf" | "docx",
 ) {
   const date = startDate instanceof Date ? startDate.toISOString() : startDate;
   const year = /^\d{4}/.exec(date)?.[0] ?? "Agreement";
-  return `${safeFilenamePart(tenantName)} ${year}.${extension}`;
+  const names = [tenantName, tradeName?.trim()]
+    .filter((name): name is string => Boolean(name))
+    .map(safeFilenamePart)
+    .filter((name, index, parts) =>
+      parts.findIndex((part) => part.toLocaleLowerCase() === name.toLocaleLowerCase()) === index,
+    );
+  return `${names.join(" ")} ${year}.${extension}`;
 }
 
 export function agreementContentDisposition(filename: string) {
