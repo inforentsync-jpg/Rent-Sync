@@ -12,6 +12,11 @@ import {
 import { getOwnerSession } from "@/lib/session";
 import { shouldUseDatabase } from "@/lib/storage-mode";
 import { formatPartyAddress, PARTY_ADDRESS_LIMITS } from "@/lib/party-address";
+import {
+  requireAgreementReapprovalForAssets,
+  requireAgreementReapprovalForOwner,
+  requireAgreementReapprovalForTenant,
+} from "@/lib/agreement-approval-invalidation";
 
 class AgreementApprovalError extends Error {
   constructor(message: string, readonly status: number) {
@@ -45,7 +50,6 @@ function parseReviewInput(value: unknown): AgreementReviewInput | null {
     securityDeposit,
     ownerFullName,
     ownerAadhaarNumber,
-    ownerFullAddress,
     ownerAddressLine1,
     ownerAddressLine2,
     ownerDistrict,
@@ -57,7 +61,6 @@ function parseReviewInput(value: unknown): AgreementReviewInput | null {
     tenantMobileNumber,
     tenantBusinessName,
     tenantBusinessNature,
-    tenantFullAddress,
     tenantAddressLine1,
     tenantAddressLine2,
     tenantDistrict,
@@ -236,6 +239,18 @@ export async function PATCH(
                 },
               },
             },
+            mergedMembers: {
+              select: {
+                id: true,
+                assetId: true,
+                asset: {
+                  select: {
+                    agreementDurationUnit: true,
+                    agreementDurationValue: true,
+                  },
+                },
+              },
+            },
           },
         });
         if (!current) throw new AgreementApprovalError("Agreement not found.", 404);
@@ -252,6 +267,67 @@ export async function PATCH(
         if (!owner || owner.id !== propertyOwnerId) {
           throw new AgreementApprovalError("This agreement is not assigned to your owner account.", 404);
         }
+        const [ownerDetails, tenantDetails, buildingDetails, assetDetails] = await Promise.all([
+          transaction.propertyOwner.findUnique({
+            where: { id: owner.id },
+            select: {
+              fullName: true, aadhaarNumber: true, fullAddress: true, addressLine1: true,
+              addressLine2: true, district: true, state: true, city: true, postalCode: true, fatherName: true,
+            },
+          }),
+          transaction.tenant.findUnique({
+            where: { id: current.tenantId },
+            select: {
+              fullName: true, mobileNumber: true, businessName: true, businessNature: true,
+              fullAddress: true, addressLine1: true, addressLine2: true, district: true,
+              state: true, city: true, postalCode: true, aadhaarNumber: true,
+            },
+          }),
+          transaction.building.findUnique({
+            where: { id: current.asset.buildingId },
+            select: { address: true, city: true, state: true, postalCode: true, panchayat: true },
+          }),
+          transaction.asset.findUnique({
+            where: { id: current.assetId },
+            select: { ward: true, roomNumber: true },
+          }),
+        ]);
+        if (!ownerDetails || !tenantDetails || !buildingDetails || !assetDetails) {
+          throw new AgreementApprovalError("Agreement details could not be loaded for approval.", 404);
+        }
+        const ownerDetailsChanged =
+          ownerDetails.fullName !== input.ownerFullName ||
+          ownerDetails.aadhaarNumber !== input.ownerAadhaarNumber ||
+          ownerDetails.fullAddress !== input.ownerFullAddress ||
+          ownerDetails.addressLine1 !== input.ownerAddressLine1 ||
+          ownerDetails.addressLine2 !== (input.ownerAddressLine2 || null) ||
+          ownerDetails.district !== input.ownerDistrict ||
+          ownerDetails.state !== input.ownerState ||
+          ownerDetails.city !== input.ownerCity ||
+          ownerDetails.postalCode !== input.ownerPostalCode ||
+          ownerDetails.fatherName !== input.ownerFatherName;
+        const tenantDetailsChanged =
+          tenantDetails.fullName !== input.tenantFullName ||
+          tenantDetails.mobileNumber !== input.tenantMobileNumber ||
+          tenantDetails.businessName !== input.tenantBusinessName ||
+          tenantDetails.businessNature !== input.tenantBusinessNature ||
+          tenantDetails.fullAddress !== input.tenantFullAddress ||
+          tenantDetails.addressLine1 !== input.tenantAddressLine1 ||
+          tenantDetails.addressLine2 !== (input.tenantAddressLine2 || null) ||
+          tenantDetails.district !== input.tenantDistrict ||
+          tenantDetails.state !== input.tenantState ||
+          tenantDetails.city !== input.tenantCity ||
+          tenantDetails.postalCode !== input.tenantPostalCode ||
+          tenantDetails.aadhaarNumber !== input.tenantAadhaarNumber;
+        const buildingDetailsChanged =
+          buildingDetails.address !== input.buildingAddress ||
+          buildingDetails.city !== input.buildingCity ||
+          buildingDetails.state !== input.buildingState ||
+          buildingDetails.postalCode !== input.buildingPostalCode ||
+          buildingDetails.panchayat !== input.buildingPanchayat;
+        const assetDetailsChanged =
+          assetDetails.ward !== input.assetWard ||
+          assetDetails.roomNumber !== input.assetRoomNumber;
         const duplicateTenantMobile = await transaction.tenant.findFirst({
           where: { id: { not: current.tenantId }, mobileNumber: input.tenantMobileNumber },
           select: { id: true },
@@ -279,15 +355,35 @@ export async function PATCH(
             400,
           );
         }
+        if (
+          current.mergedMembers.some((member) =>
+            !isAgreementDurationUnit(member.asset.agreementDurationUnit) ||
+            !hasValidAgreementDurationTerm(
+              input.startDate,
+              input.endDate,
+              member.asset.agreementDurationUnit,
+              member.asset.agreementDurationValue,
+            ),
+          )
+        ) {
+          throw new AgreementApprovalError(
+            "The agreement dates must match the configured duration for every included unit.",
+            400,
+          );
+        }
 
         const startsAt = new Date(`${input.startDate}T00:00:00.000Z`);
         const endsAt = new Date(`${input.endDate}T00:00:00.000Z`);
+        const groupedAgreementIds = [id, ...current.mergedMembers.map((member) => member.id)];
+        const groupedAssetIds = [current.assetId, ...current.mergedMembers.map((member) => member.assetId)];
         const duplicateYear = await transaction.rentalAgreement.findFirst({
           where: {
-            id: { not: id },
-            assetId: current.assetId,
+            id: { notIn: groupedAgreementIds },
+            assetId: { in: groupedAssetIds },
             tenantId: current.tenantId,
             agreementYear: Number(input.startDate.slice(0, 4)),
+            status: { not: "CANCELLED" },
+            mergedIntoAgreementId: null,
           },
           select: { id: true },
         });
@@ -296,8 +392,8 @@ export async function PATCH(
         }
         const overlapping = await transaction.rentalAgreement.findFirst({
           where: {
-            id: { not: id },
-            assetId: current.assetId,
+            id: { notIn: groupedAgreementIds },
+            assetId: { in: groupedAssetIds },
             status: "ACTIVE",
             startDate: { lte: endsAt },
             endDate: { gte: startsAt },
@@ -369,9 +465,34 @@ export async function PATCH(
           where: { id: current.assetId },
           data: { ward: input.assetWard, roomNumber: input.assetRoomNumber },
         });
+        const excludeCurrent = [current.id];
+        if (ownerDetailsChanged) {
+          await requireAgreementReapprovalForOwner(transaction, owner.id, excludeCurrent);
+        }
+        if (tenantDetailsChanged) {
+          await requireAgreementReapprovalForTenant(transaction, current.tenantId, excludeCurrent);
+        }
+        if (buildingDetailsChanged) {
+          const buildingAssets = await transaction.asset.findMany({
+            where: { buildingId: current.asset.buildingId },
+            select: { id: true },
+          });
+          await requireAgreementReapprovalForAssets(
+            transaction,
+            buildingAssets.map(({ id: assetId }) => assetId),
+            excludeCurrent,
+          );
+        } else if (assetDetailsChanged) {
+          await requireAgreementReapprovalForAssets(
+            transaction,
+            [current.assetId, ...current.mergedMembers.map((member) => member.assetId)],
+            excludeCurrent,
+          );
+        }
         const approvedAssetAgreements = await transaction.rentalAgreement.findMany({
           where: {
             assetId: current.assetId,
+            mergedIntoAgreementId: null,
             status: "ACTIVE",
             ownerApprovedAt: { not: null },
           },
@@ -383,7 +504,7 @@ export async function PATCH(
           orderBy: [{ agreementYear: "desc" }, { ownerApprovedAt: "desc" }],
         });
         const latestApprovedAgreement = approvedAssetAgreements[0];
-        if (latestApprovedAgreement) {
+        if (latestApprovedAgreement && current.mergedMembers.length === 0) {
           await transaction.asset.update({
             where: { id: current.assetId },
             data: { securityDeposit: latestApprovedAgreement.securityDeposit },

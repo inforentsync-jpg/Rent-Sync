@@ -10,6 +10,7 @@ import {
   ChevronRight,
   FileDown,
   FileCheck2,
+  FileText,
   Home,
   ShieldCheck,
 } from "lucide-react";
@@ -77,13 +78,24 @@ function formatDate(value: string) {
 
 export default function PublicTenantPage({ data, token }: { data: PublicTenantData; token: string }) {
   const [tab, setTab] = useState<PublicTab>("overview");
+  const [selectedAgreementYear, setSelectedAgreementYear] = useState<string | null>(null);
   const [reviewingAgreement, setReviewingAgreement] = useState<PublicTenantData["agreements"][number] | null>(null);
   const today = new Date().toISOString().slice(0, 10);
-  const getStatus = (agreement: PublicAgreement) =>
-    agreement.status === "DRAFT" ? "Draft" : agreement.endDate < today ? "Expired" : "Active";
-  const currentAgreements = data.agreements.filter((agreement) => getStatus(agreement) === "Active");
+  const getStatus = (agreement: PublicAgreement) => {
+    if (agreement.status === "CANCELLED") return "Cancelled";
+    if (agreement.status === "DRAFT") return "Draft";
+    if (agreement.status === "ACTIVE" && !agreement.mandatoryDetailsApprovedAt) return "Awaiting owner approval";
+    if (agreement.endDate < today) return "Expired";
+    return agreement.ownerApprovedAt ? "Approved" : "Awaiting approval";
+  };
+  const currentAgreements = data.agreements.filter((agreement) => getStatus(agreement) === "Approved");
+  const agreementYears = [...new Set(data.agreements.map((agreement) => agreement.startDate.slice(0, 4)))]
+    .sort((left, right) => right.localeCompare(left));
+  const visibleAgreements = selectedAgreementYear
+    ? data.agreements.filter((agreement) => agreement.startDate.slice(0, 4) === selectedAgreementYear)
+    : data.agreements;
   const expiryAgreement = [...currentAgreements].sort((left, right) => left.endDate.localeCompare(right.endDate))[0]
-    ?? data.agreements.find((agreement) => agreement.status === "DRAFT")
+    ?? data.agreements.find((agreement) => getStatus(agreement) === "Draft")
     ?? data.agreements[0];
   const expiryLabel = expiryAgreement
     ? getStatus(expiryAgreement) === "Draft"
@@ -234,14 +246,46 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
 
           {tab === "agreements" ? (
             <div className="space-y-3">
-              {data.agreements.length ? data.agreements.map((agreement) => {
+              {agreementYears.length ? (
+                <div role="tablist" aria-label="Filter agreements by year" className="flex flex-wrap gap-2 rounded-2xl border border-[#e5ece6] bg-white p-3">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={selectedAgreementYear === null}
+                    onClick={() => setSelectedAgreementYear(null)}
+                    className={`min-h-10 rounded-xl px-4 text-[11px] font-semibold transition ${selectedAgreementYear === null ? "bg-[#176b4b] text-white" : "border border-[#dfe8e1] bg-white text-[#355942]"}`}
+                  >
+                    All years
+                  </button>
+                  {agreementYears.map((year) => {
+                    const count = data.agreements.filter((agreement) => agreement.startDate.slice(0, 4) === year).length;
+                    return (
+                      <button
+                        key={year}
+                        type="button"
+                        role="tab"
+                        aria-selected={selectedAgreementYear === year}
+                        onClick={() => setSelectedAgreementYear(year)}
+                        className={`min-h-10 rounded-xl px-4 text-[11px] font-semibold transition ${selectedAgreementYear === year ? "bg-[#176b4b] text-white" : "border border-[#dfe8e1] bg-white text-[#355942]"}`}
+                      >
+                        {year} <span className={selectedAgreementYear === year ? "ml-1 opacity-80" : "ml-1 text-[#849188]"}>({count})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {visibleAgreements.length ? visibleAgreements.map((agreement) => {
+                const status = getStatus(agreement);
                 return (
                 <article key={agreement.id} className="rounded-2xl border border-[#e5ece6] bg-white p-5 shadow-[0_8px_28px_-24px_rgba(26,54,36,0.3)] sm:flex sm:items-center sm:justify-between sm:gap-4">
                   <div>
                     <h2 className="text-[36px] font-bold leading-none tracking-[-0.06em] text-[#203328]">{agreement.startDate.slice(0, 4)}</h2>
                     <p className="mt-2 text-[10px] font-medium text-[#829087]">Asset ID · {agreement.assetId}</p>
+                    <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-[10px] font-semibold ${status === "Approved" ? "bg-[#eaf3ec] text-[#315b41]" : status === "Cancelled" || status === "Expired" ? "bg-[#f1f3f1] text-[#718078]" : "bg-[#fff4df] text-[#855a17]"}`}>
+                      {status}
+                    </span>
                   </div>
-                  <div className="mt-4 grid w-full gap-2 sm:mt-0 sm:w-auto sm:grid-cols-2">
+                  <div className="mt-4 grid w-full gap-2 sm:mt-0 sm:w-auto sm:grid-cols-3">
                     <button type="button" onClick={() => setReviewingAgreement(agreement)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#176b4b] px-4 text-[11px] font-semibold text-white transition hover:bg-[#10583c]">
                       Review agreement <ChevronRight size={15} />
                     </button>
@@ -253,10 +297,18 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
                     >
                       <FileDown size={15} /> Download PDF
                     </a>
+                    <a
+                      href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(agreement.id)}/word`}
+                      download
+                      aria-label={`Download Word document for ${agreement.agreementNumber}`}
+                      className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#cfe0d3] bg-[#f5faf6] px-4 text-[11px] font-semibold text-[#176b4b] shadow-sm transition hover:border-[#176b4b] hover:bg-[#eaf4ed]"
+                    >
+                      <FileText size={15} /> Download Word
+                    </a>
                   </div>
                 </article>
                 );
-              }) : <EmptyCard text="No agreements are available on this shared page." />}
+              }) : <EmptyCard text={selectedAgreementYear ? `No agreements are available for ${selectedAgreementYear}.` : "No agreements are available on this shared page."} />}
             </div>
           ) : null}
 

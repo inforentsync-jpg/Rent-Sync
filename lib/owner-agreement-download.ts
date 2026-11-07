@@ -33,6 +33,7 @@ export async function getOwnerAgreementPdfData(mobileNumber: string, id: string)
         const agreement = await prisma.rentalAgreement.findFirst({
           where: {
             id,
+            mergedIntoAgreementId: null,
             asset: {
               building: {
                 OR: [
@@ -55,6 +56,22 @@ export async function getOwnerAgreementPdfData(mobileNumber: string, id: string)
                 },
               },
             },
+            mergedMembers: {
+              orderBy: { createdAt: "asc" },
+              include: {
+                asset: {
+                  include: {
+                    building: true,
+                    termTemplates: {
+                      orderBy: { template: { name: "asc" } },
+                      include: {
+                        template: { include: { items: { orderBy: { position: "asc" } } } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           },
         });
         return agreement ? { owner, ...agreement } : null;
@@ -73,8 +90,20 @@ export async function getOwnerAgreementPdfData(mobileNumber: string, id: string)
         ? record.building
         : null;
   const tenant = "tenant" in agreement ? agreement.tenant : record.tenant;
-  const templateTerms = "termTemplates" in asset
-    ? asset.termTemplates.map(({ template }) => ({
+  const mergedMembers = "agreement" in record
+    ? record.mergedMembers
+    : "mergedMembers" in record
+      ? record.mergedMembers
+      : [];
+  const assets = [
+    asset,
+    ...mergedMembers.map((member) => member.asset),
+  ].filter((entry, index, all) =>
+    all.findIndex((candidate) => candidate.id === entry.id) === index,
+  );
+  const templateTerms = assets.flatMap((mergedAsset) =>
+    "termTemplates" in mergedAsset
+      ? mergedAsset.termTemplates.map(({ template }) => ({
         heading: template.name,
         items: template.items.map(({ position, text, importantObligation }) => ({
           position,
@@ -82,7 +111,24 @@ export async function getOwnerAgreementPdfData(mobileNumber: string, id: string)
           importantObligation,
         })),
       }))
-    : [];
+      : [],
+  );
+  const uniqueTerms = new Map<string, { heading: string; items: typeof templateTerms[number]["items"] }>();
+  for (const group of templateTerms) {
+    const current = uniqueTerms.get(group.heading) ?? { heading: group.heading, items: [] };
+    const itemTexts = new Set(current.items.map((item) => item.text));
+    for (const item of group.items) {
+      if (!itemTexts.has(item.text)) {
+        current.items.push(item);
+        itemTexts.add(item.text);
+      }
+    }
+    uniqueTerms.set(group.heading, current);
+  }
+  const combinedTemplateTerms = [...uniqueTerms.values()].map((group) => ({
+    ...group,
+    items: group.items.map((item, index) => ({ ...item, position: index + 1 })),
+  }));
   if (!building) {
     throw new AgreementDownloadError("Agreement property was not found.", 404);
   }
@@ -119,15 +165,15 @@ export async function getOwnerAgreementPdfData(mobileNumber: string, id: string)
     city: building.city,
     state: building.state,
     postalCode: building.postalCode,
-    assetName: asset.name,
-    unitNumber: asset.unitNumber,
+    assetName: assets.map((entry) => entry.name).join(", "),
+    unitNumber: assets.map((entry) => entry.unitNumber).join(", "),
     assetType: asset.assetType,
-    ward: asset.ward ?? null,
+    ward: [...new Set(assets.map((entry) => entry.ward).filter(Boolean))].join(", ") || null,
     panchayat: building.panchayat ?? null,
-    roomNumber: asset.roomNumber ?? asset.unitNumber,
+    roomNumber: assets.map((entry) => entry.roomNumber ?? entry.unitNumber).join(", "),
     usageDescription: tenant.businessNature ?? null,
     tradeName: tenant.businessName ?? null,
-    templateTerms,
+    templateTerms: combinedTemplateTerms,
   };
   const safeName = agreement.agreementNumber.replace(/[^A-Za-z0-9_-]/g, "") || "rental-agreement";
   return { data, safeName };

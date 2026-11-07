@@ -23,6 +23,7 @@ export async function generateAnnualAgreementDrafts(now = new Date()) {
         },
       },
       agreements: {
+        where: { mergedIntoAgreementId: null, status: { not: "CANCELLED" } },
         select: {
           tenantId: true,
           agreementYear: true,

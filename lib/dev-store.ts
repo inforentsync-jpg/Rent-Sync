@@ -110,11 +110,21 @@ export type DevAgreement = {
   securityDeposit: number;
   terms: string;
   importantTerms?: string;
-  status: "ACTIVE" | "DRAFT";
+  status: "ACTIVE" | "DRAFT" | "MERGED" | "CANCELLED";
   agreementYear: number;
   ownerApprovedAt?: string | null;
   tenantApprovedAt?: string | null;
   mandatoryDetailsApprovedAt?: string | null;
+  mergedIntoAgreementId?: string | null;
+  mergedOriginalStatus?: "ACTIVE" | "DRAFT" | null;
+  mergedOriginalStartDate?: string | null;
+  mergedOriginalEndDate?: string | null;
+  mergedOriginalAgreementYear?: number | null;
+  mergedOriginalMonthlyRent?: number | null;
+  mergedOriginalSecurityDeposit?: number | null;
+  mergedOriginalOwnerApprovedAt?: string | null;
+  mergedOriginalTenantApprovedAt?: string | null;
+  mergedOriginalMandatoryDetailsApprovedAt?: string | null;
   renewalOfId?: string | null;
   createdAt: string;
 };
@@ -145,9 +155,64 @@ type DevStore = {
   dismissedAgreementRenewals: string[];
 };
 
+function markDevAgreementsForReview(
+  store: DevStore,
+  predicate: (agreement: DevAgreement) => boolean,
+) {
+  const affected = store.agreements.filter((agreement) =>
+    !agreement.mergedIntoAgreementId &&
+    (agreement.status === "ACTIVE" || agreement.status === "DRAFT") &&
+    predicate(agreement),
+  );
+  const affectedIds = new Set(affected.map(({ id }) => id));
+  for (const agreement of affected) {
+    agreement.status = "DRAFT";
+    agreement.ownerApprovedAt = null;
+    agreement.tenantApprovedAt = null;
+    agreement.mandatoryDetailsApprovedAt = null;
+  }
+  for (const agreement of store.agreements) {
+    if (!agreement.mergedIntoAgreementId || !affectedIds.has(agreement.mergedIntoAgreementId)) continue;
+    agreement.mergedOriginalStatus = "DRAFT";
+    agreement.mergedOriginalOwnerApprovedAt = null;
+    agreement.mergedOriginalTenantApprovedAt = null;
+    agreement.mergedOriginalMandatoryDetailsApprovedAt = null;
+  }
+}
+
+function syncDevAgreementAmountsFromAssets(store: DevStore, assetIds: Set<string>) {
+  const affected = store.agreements.filter((agreement) =>
+    !agreement.mergedIntoAgreementId &&
+    (agreement.status === "ACTIVE" || agreement.status === "DRAFT") &&
+    (assetIds.has(agreement.assetId) ||
+      store.agreements.some(
+        (member) => member.mergedIntoAgreementId === agreement.id && assetIds.has(member.assetId),
+      )),
+  );
+  for (const agreement of affected) {
+    const memberAssetIds = new Set([
+      agreement.assetId,
+      ...store.agreements
+        .filter((member) => member.mergedIntoAgreementId === agreement.id)
+        .map((member) => member.assetId),
+    ]);
+    const memberAssets = store.assets.filter((asset) => memberAssetIds.has(asset.id));
+    agreement.monthlyRent = memberAssets.reduce((total, asset) => total + asset.monthlyRent, 0);
+    agreement.securityDeposit = memberAssets.reduce((total, asset) => total + asset.securityDeposit, 0);
+    for (const member of store.agreements) {
+      if (member.mergedIntoAgreementId !== agreement.id) continue;
+      const asset = memberAssets.find((entry) => entry.id === member.assetId);
+      if (!asset) continue;
+      member.mergedOriginalMonthlyRent = asset.monthlyRent;
+      member.mergedOriginalSecurityDeposit = asset.securityDeposit;
+    }
+  }
+}
+
 type BuildingInput = Omit<DevBuilding, "id" | "ownerId" | "createdAt" | "updatedAt">;
 
 export class DevAgreementConflictError extends Error {}
+export class DevAgreementMergeError extends Error {}
 
 const STORE_PATH = path.join(process.cwd(), ".rent-sync-dev-data.json");
 let storeQueue: Promise<void> = Promise.resolve();
@@ -212,6 +277,17 @@ async function readStore(): Promise<DevStore> {
           importantTerms: agreement.importantTerms ?? "",
           ownerApprovedAt: agreement.ownerApprovedAt ?? null,
           tenantApprovedAt: agreement.tenantApprovedAt ?? null,
+          mandatoryDetailsApprovedAt: agreement.mandatoryDetailsApprovedAt ?? null,
+          mergedIntoAgreementId: agreement.mergedIntoAgreementId ?? null,
+          mergedOriginalStatus: agreement.mergedOriginalStatus ?? null,
+          mergedOriginalStartDate: agreement.mergedOriginalStartDate ?? null,
+          mergedOriginalEndDate: agreement.mergedOriginalEndDate ?? null,
+          mergedOriginalAgreementYear: agreement.mergedOriginalAgreementYear ?? null,
+          mergedOriginalMonthlyRent: agreement.mergedOriginalMonthlyRent ?? null,
+          mergedOriginalSecurityDeposit: agreement.mergedOriginalSecurityDeposit ?? null,
+          mergedOriginalOwnerApprovedAt: agreement.mergedOriginalOwnerApprovedAt ?? null,
+          mergedOriginalTenantApprovedAt: agreement.mergedOriginalTenantApprovedAt ?? null,
+          mergedOriginalMandatoryDetailsApprovedAt: agreement.mergedOriginalMandatoryDetailsApprovedAt ?? null,
           startDate: legacyStart,
           endDate: legacySource
             ? addElevenMonthTerm(legacyStart) ?? agreement.endDate
@@ -425,6 +501,33 @@ export function updateDevOwnerProfile(
   return withStore(async (store) => {
     const owner = store.owners.find((entry) => entry.mobileNumber === mobileNumber);
     if (!owner) return null;
+    const agreementDetailsChanged =
+      owner.fullName !== fullName ||
+      (agreementDetails !== undefined && (
+        owner.aadhaarNumber !== agreementDetails.aadhaarNumber ||
+        owner.fullAddress !== agreementDetails.fullAddress ||
+        owner.addressLine1 !== agreementDetails.addressLine1 ||
+        owner.addressLine2 !== agreementDetails.addressLine2 ||
+        owner.district !== agreementDetails.district ||
+        owner.state !== agreementDetails.state ||
+        owner.city !== agreementDetails.city ||
+        owner.postalCode !== agreementDetails.postalCode ||
+        owner.fatherName !== agreementDetails.fatherName
+      ));
+    if (agreementDetailsChanged) {
+      const ownerBuildingIds = new Set(
+        store.buildings.filter((building) => building.ownerId === owner.id).map((building) => building.id),
+      );
+      const ownerAssetIds = new Set(
+        store.assets.filter((asset) => ownerBuildingIds.has(asset.buildingId)).map((asset) => asset.id),
+      );
+      markDevAgreementsForReview(store, (agreement) =>
+        ownerAssetIds.has(agreement.assetId) ||
+        store.agreements.some(
+          (member) => member.mergedIntoAgreementId === agreement.id && ownerAssetIds.has(member.assetId),
+        ),
+      );
+    }
     owner.fullName = fullName;
     owner.email = email;
     for (const building of store.buildings) {
@@ -477,15 +580,27 @@ export function getDevOwnerPortfolio(mobileNumber: string) {
         tenant.assetIds.some((assetId) => assetIds.has(assetId)),
     );
     const tenantIds = new Set(tenants.map((entry) => entry.id));
-    const agreements = store.agreements.filter(
-      (entry) => assetIds.has(entry.assetId) || tenantIds.has(entry.tenantId),
-    );
+    const agreements = store.agreements
+      .filter(
+        (entry) =>
+          !entry.mergedIntoAgreementId &&
+          (assetIds.has(entry.assetId) || tenantIds.has(entry.tenantId)),
+      )
+      .map((agreement) => ({
+        ...agreement,
+        agreementDurationUnit: assets.find((asset) => asset.id === agreement.assetId)?.agreementDurationUnit,
+        agreementDurationValue: assets.find((asset) => asset.id === agreement.assetId)?.agreementDurationValue,
+        mergedAssetIds: [...new Set(store.agreements
+          .filter((entry) => entry.mergedIntoAgreementId === agreement.id)
+          .map((entry) => entry.assetId))],
+      }));
     const deletedAgreements = store.archivedAgreements.filter((entry) => entry.ownerId === owner.id);
     const assetsWithApprovedAdvance = assets.map((asset) => {
       const latestApprovedAgreement = agreements
         .filter((agreement) =>
           agreement.assetId === asset.id &&
-          agreement.status !== "DRAFT" &&
+          !agreement.mergedIntoAgreementId &&
+          agreement.status === "ACTIVE" &&
           agreement.ownerApprovedAt !== null &&
           agreement.ownerApprovedAt !== undefined,
         )
@@ -609,6 +724,30 @@ export function updateDevAsset(
       throw new Error("This unit number already exists in that building.");
     }
 
+    const changed =
+      asset.buildingId !== input.buildingId ||
+      asset.name !== input.name ||
+      asset.assetType !== input.assetType ||
+      asset.unitNumber !== input.unitNumber ||
+      asset.monthlyRent !== input.monthlyRent ||
+      asset.securityDeposit !== input.securityDeposit ||
+      asset.agreementDurationUnit !== input.agreementDurationUnit ||
+      asset.agreementDurationValue !== input.agreementDurationValue ||
+      asset.agreementStartDate !== input.agreementStartDate ||
+      asset.externalBuildingId !== input.externalBuildingId ||
+      asset.ward !== input.ward ||
+      asset.roomNumber !== input.roomNumber ||
+      asset.ksmartBuildingId !== input.ksmartBuildingId ||
+      asset.ksrbId !== input.ksrbId;
+    if (changed) {
+      syncDevAgreementAmountsFromAssets(store, new Set([assetId]));
+      markDevAgreementsForReview(store, (agreement) =>
+        agreement.assetId === assetId ||
+        store.agreements.some(
+          (member) => member.mergedIntoAgreementId === agreement.id && member.assetId === assetId,
+        ),
+      );
+    }
     Object.assign(asset, input, { updatedAt: new Date().toISOString() });
     await writeStore(store);
     return asset;
@@ -641,6 +780,25 @@ export function updateDevPortfolioItem(
         (entry) => entry.id === input.companyId && entry.ownerId === owner.id,
       );
       if (!company) throw new Error("Company not found in your account.");
+      const changed =
+        building.name !== input.name ||
+        building.address !== input.address ||
+        building.city !== input.city ||
+        building.state !== input.state ||
+        building.postalCode !== input.postalCode ||
+        building.panchayat !== input.panchayat ||
+        building.companyId !== company.id;
+      if (changed) {
+        const buildingAssetIds = new Set(
+          store.assets.filter((asset) => asset.buildingId === building.id).map((asset) => asset.id),
+        );
+        markDevAgreementsForReview(store, (agreement) =>
+          buildingAssetIds.has(agreement.assetId) ||
+          store.agreements.some(
+            (member) => member.mergedIntoAgreementId === agreement.id && buildingAssetIds.has(member.assetId),
+          ),
+        );
+      }
       Object.assign(building, {
         companyId: company.id,
         name: input.name ?? building.name,
@@ -663,6 +821,25 @@ export function updateDevPortfolioItem(
       store.tenants.some((entry) => entry.id !== id && entry.mobileNumber === mobileNumber)
     ) {
       throw new Error("This mobile number is already registered.");
+    }
+    const changed =
+      tenant.fullName !== input.fullName ||
+      tenant.mobileNumber !== mobileNumber ||
+      tenant.businessName !== input.businessName ||
+      tenant.businessNature !== input.businessNature ||
+      tenant.fullAddress !== input.fullAddress ||
+      tenant.addressLine1 !== input.addressLine1 ||
+      tenant.addressLine2 !== input.addressLine2 ||
+      tenant.district !== input.district ||
+      tenant.state !== input.state ||
+      tenant.city !== input.city ||
+      tenant.postalCode !== input.postalCode ||
+      tenant.aadhaarNumber !== input.aadhaarNumber ||
+      tenant.fatherName !== input.fatherName ||
+      tenant.email !== input.email ||
+      tenant.photoDataUrl !== input.photoDataUrl;
+    if (changed) {
+      markDevAgreementsForReview(store, (agreement) => agreement.tenantId === tenant.id);
     }
     tenant.fullName = input.fullName ?? tenant.fullName;
     tenant.mobileNumber = mobileNumber;
@@ -929,7 +1106,9 @@ export function updateDevDraftAgreement(
           entry.id !== agreementId &&
           entry.assetId === agreement.assetId &&
           entry.tenantId === agreement.tenantId &&
-          entry.agreementYear === agreementYear,
+          entry.agreementYear === agreementYear &&
+          entry.status !== "CANCELLED" &&
+          !entry.mergedIntoAgreementId,
       )
     ) {
       throw new DevAgreementConflictError("An agreement already exists for this tenant, unit, and year.");
@@ -1025,7 +1204,9 @@ export function createDevTenant(
         (agreement) =>
           agreement.assetId === asset.id &&
           agreement.tenantId === tenant.id &&
-          agreement.agreementYear === agreementYear,
+          agreement.agreementYear === agreementYear &&
+          agreement.status !== "CANCELLED" &&
+          !agreement.mergedIntoAgreementId,
       )
     ) {
       throw new DevAgreementConflictError(
@@ -1069,7 +1250,9 @@ export function createDevTenant(
         (agreement) =>
           agreement.assetId === asset.id &&
           agreement.tenantId === tenant.id &&
-          agreement.agreementYear === renewalTerm.year,
+          agreement.agreementYear === renewalTerm.year &&
+          agreement.status !== "CANCELLED" &&
+          !agreement.mergedIntoAgreementId,
       )
     ) {
       store.agreements.unshift({
@@ -1148,7 +1331,9 @@ export function createDevAgreement(input: {
         (agreement) =>
           agreement.assetId === asset.id &&
           agreement.tenantId === tenant.id &&
-          agreement.agreementYear === agreementYear,
+          agreement.agreementYear === agreementYear &&
+          agreement.status !== "CANCELLED" &&
+          !agreement.mergedIntoAgreementId,
       )
     ) {
       throw new DevAgreementConflictError(
@@ -1248,13 +1433,34 @@ export async function reviewDevAgreement(
       throw new DevAgreementConflictError("This tenant mobile number is already registered.");
     }
     const agreementYear = Number(input.startDate.slice(0, 4));
+    const mergedMembers = store.agreements.filter(
+      (entry) => entry.mergedIntoAgreementId === agreement.id,
+    );
+    const groupedAgreements = [agreement, ...mergedMembers];
+    const groupedIds = new Set(groupedAgreements.map((entry) => entry.id));
+    const groupedAssetIds = new Set(groupedAgreements.map((entry) => entry.assetId));
+    if (
+      mergedMembers.some((member) => {
+        const memberAsset = store.assets.find((entry) => entry.id === member.assetId);
+        return !memberAsset || !hasValidAgreementDurationTerm(
+          input.startDate,
+          input.endDate,
+          memberAsset.agreementDurationUnit,
+          memberAsset.agreementDurationValue,
+        );
+      })
+    ) {
+      throw new Error("The agreement dates must match the configured duration for every included unit.");
+    }
     if (
       store.agreements.some(
         (entry) =>
-          entry.id !== agreement.id &&
-          entry.assetId === agreement.assetId &&
+          !groupedIds.has(entry.id) &&
+          groupedAssetIds.has(entry.assetId) &&
           entry.tenantId === agreement.tenantId &&
-          entry.agreementYear === agreementYear,
+          entry.agreementYear === agreementYear &&
+          entry.status !== "CANCELLED" &&
+          !entry.mergedIntoAgreementId,
       )
     ) {
       throw new DevAgreementConflictError(
@@ -1264,8 +1470,10 @@ export async function reviewDevAgreement(
     if (
       store.agreements.some(
         (entry) =>
-          entry.id !== agreement.id &&
-          agreementOverlaps(entry, asset.id, input.startDate, input.endDate),
+          !groupedIds.has(entry.id) &&
+          [...groupedAssetIds].some((assetId) =>
+            agreementOverlaps(entry, assetId, input.startDate, input.endDate),
+          ),
       )
     ) {
       throw new DevAgreementConflictError("This asset already has an active agreement for those dates.");
@@ -1330,7 +1538,8 @@ export async function reviewDevAgreement(
     const latestApprovedAgreement = store.agreements
       .filter((entry) =>
         entry.assetId === asset.id &&
-        entry.status !== "DRAFT" &&
+        entry.status === "ACTIVE" &&
+        !entry.mergedIntoAgreementId &&
         entry.ownerApprovedAt !== null &&
         entry.ownerApprovedAt !== undefined,
       )
@@ -1341,7 +1550,9 @@ export async function reviewDevAgreement(
         const rightApproved = right.ownerApprovedAt ? new Date(right.ownerApprovedAt).getTime() : 0;
         return rightApproved - leftApproved;
       })[0];
-    asset.securityDeposit = latestApprovedAgreement?.securityDeposit ?? input.securityDeposit;
+    if (mergedMembers.length === 0) {
+      asset.securityDeposit = latestApprovedAgreement?.securityDeposit ?? input.securityDeposit;
+    }
     await writeStore(store);
     return agreement;
   });
@@ -1431,7 +1642,7 @@ export function getDevOwnerAgreement(mobileNumber: string, agreementId: string) 
     const owner = store.owners.find((entry) => entry.mobileNumber === mobileNumber);
     if (!owner) return null;
     const agreement = store.agreements.find((entry) => entry.id === agreementId);
-    if (!agreement) return null;
+    if (!agreement || agreement.mergedIntoAgreementId) return null;
     const asset = store.assets.find((entry) => entry.id === agreement.assetId);
     const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
     const company = store.companies.find((entry) => entry.id === building?.companyId);
@@ -1440,7 +1651,224 @@ export function getDevOwnerAgreement(mobileNumber: string, agreementId: string) 
       (company?.ownerId === owner.id && building?.companyId === company.id);
     const tenant = store.tenants.find((entry) => entry.id === agreement.tenantId);
     if (!isOwned || !asset || !building || !tenant) return null;
-    return { owner, tenant, asset, building, agreement };
+    const mergedMembers = store.agreements
+      .filter((entry) => entry.mergedIntoAgreementId === agreement.id)
+      .flatMap((member) => {
+        const memberAsset = store.assets.find((entry) => entry.id === member.assetId);
+        const memberBuilding = store.buildings.find((entry) => entry.id === memberAsset?.buildingId);
+        if (!memberAsset || !memberBuilding) return [];
+        return [{ agreement: member, asset: memberAsset, building: memberBuilding }];
+      });
+    return { owner, tenant, asset, building, agreement, mergedMembers };
+  });
+}
+
+export function mergeDevAgreements(ownerMobile: string, agreementIds: string[]) {
+  return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === ownerMobile);
+    if (!owner) throw new DevAgreementMergeError("Owner account was not found.");
+    const ids = [...new Set(agreementIds)];
+    if (ids.length < 2 || ids.length > 12) {
+      throw new DevAgreementMergeError("Select between 2 and 12 agreements to merge.");
+    }
+
+    const agreements = ids.map((id) => store.agreements.find((entry) => entry.id === id));
+    if (agreements.some((agreement) => !agreement)) {
+      throw new DevAgreementMergeError("One or more agreements were not found.");
+    }
+    const records = agreements as DevAgreement[];
+    const primary = records[0];
+    const assetRecords = records.map((agreement) =>
+      store.assets.find((entry) => entry.id === agreement.assetId),
+    );
+    const buildingRecords = assetRecords.map((asset) =>
+      store.buildings.find((entry) => entry.id === asset?.buildingId),
+    );
+    const ownsBuilding = buildingRecords.map((building) => {
+      const company = store.companies.find((entry) => entry.id === building?.companyId);
+      return building?.ownerId === owner.id || company?.ownerId === owner.id;
+    });
+
+    if (
+      records.some((agreement) => agreement.status !== "ACTIVE" && agreement.status !== "DRAFT") ||
+      records.some((agreement) => agreement.mergedIntoAgreementId) ||
+      store.agreements.some((agreement) => ids.includes(agreement.mergedIntoAgreementId ?? "")) ||
+      records.some((agreement) => agreement.tenantId !== primary.tenantId) ||
+      assetRecords.some((asset) => !asset) ||
+      buildingRecords.some((building) => !building) ||
+      ownsBuilding.some((isOwned) => !isOwned) ||
+      assetRecords.some((asset) => asset?.buildingId !== assetRecords[0]?.buildingId) ||
+      assetRecords.some((asset) =>
+        !store.tenants.some((tenant) =>
+          tenant.id === primary.tenantId && tenant.assetIds.includes(asset?.id ?? ""),
+        ),
+      ) ||
+      assetRecords.some((asset) =>
+        asset?.agreementDurationUnit !== assetRecords[0]?.agreementDurationUnit ||
+        asset?.agreementDurationValue !== assetRecords[0]?.agreementDurationValue,
+      ) ||
+      new Set(records.map((agreement) => agreement.assetId)).size !== records.length
+    ) {
+      throw new DevAgreementMergeError(
+        "Select one unmerged agreement per asset. Agreements must belong to the same tenant and building and use matching duration settings.",
+      );
+    }
+
+    const selectedIds = new Set(ids);
+    const selectedAssetIds = new Set(records.map((agreement) => agreement.assetId));
+    if (
+      store.agreements.some(
+        (agreement) =>
+          !selectedIds.has(agreement.id) &&
+          agreement.status === "ACTIVE" &&
+          selectedAssetIds.has(agreement.assetId) &&
+          agreement.startDate.slice(0, 10) <= primary.endDate.slice(0, 10) &&
+          agreement.endDate.slice(0, 10) >= primary.startDate.slice(0, 10),
+      )
+    ) {
+      throw new DevAgreementMergeError(
+        "One of these units has another active agreement during this period. Resolve the overlap before merging.",
+      );
+    }
+
+    const monthlyRent = records.reduce((total, agreement) => total + agreement.monthlyRent, 0);
+    const securityDeposit = records.reduce((total, agreement) => total + agreement.securityDeposit, 0);
+    if (!Number.isSafeInteger(monthlyRent) || !Number.isSafeInteger(securityDeposit)) {
+      throw new DevAgreementMergeError("The combined rent or deposit exceeds the supported amount.");
+    }
+
+    const uniqueText = (values: Array<string | undefined>) =>
+      [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))].join("\n");
+    const mergedAgreement: DevAgreement = {
+      id: randomUUID(),
+      agreementNumber: `RS-${new Date().getFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`,
+      assetId: primary.assetId,
+      tenantId: primary.tenantId,
+      startDate: primary.startDate,
+      endDate: primary.endDate,
+      agreementYear: primary.agreementYear,
+      monthlyRent,
+      securityDeposit,
+      terms: uniqueText(records.map((entry) => entry.terms)),
+      importantTerms: uniqueText(records.map((entry) => entry.importantTerms)),
+      status: "DRAFT",
+      createdAt: new Date().toISOString(),
+    };
+    for (const member of records) {
+      member.mergedOriginalStatus = member.status === "ACTIVE" ? "ACTIVE" : "DRAFT";
+      member.mergedOriginalStartDate = member.startDate;
+      member.mergedOriginalEndDate = member.endDate;
+      member.mergedOriginalAgreementYear = member.agreementYear;
+      member.mergedOriginalMonthlyRent = member.monthlyRent;
+      member.mergedOriginalSecurityDeposit = member.securityDeposit;
+      member.mergedOriginalOwnerApprovedAt = member.ownerApprovedAt ?? null;
+      member.mergedOriginalTenantApprovedAt = member.tenantApprovedAt ?? null;
+      member.mergedOriginalMandatoryDetailsApprovedAt = member.mandatoryDetailsApprovedAt ?? null;
+      member.status = "CANCELLED";
+      member.mergedIntoAgreementId = mergedAgreement.id;
+    }
+    store.agreements.push(mergedAgreement);
+    await writeStore(store);
+    return mergedAgreement;
+  });
+}
+
+export function splitDevAgreement(ownerMobile: string, agreementId: string) {
+  return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === ownerMobile);
+    const agreement = store.agreements.find((entry) => entry.id === agreementId);
+    const asset = store.assets.find((entry) => entry.id === agreement?.assetId);
+    const building = store.buildings.find((entry) => entry.id === asset?.buildingId);
+    const company = store.companies.find((entry) => entry.id === building?.companyId);
+    if (
+      !owner ||
+      !agreement ||
+      agreement.mergedIntoAgreementId ||
+      !(building?.ownerId === owner.id || company?.ownerId === owner.id)
+    ) {
+      throw new DevAgreementMergeError("Merged agreement was not found in your account.");
+    }
+    const members = store.agreements.filter((entry) => entry.mergedIntoAgreementId === agreement.id);
+    if (!members.length) {
+      throw new DevAgreementMergeError("This agreement is not a merged agreement.");
+    }
+    const approvedAfterMerge =
+      agreement.status === "ACTIVE" && Boolean(agreement.mandatoryDetailsApprovedAt);
+
+    const freshCombinedAgreement = members.every(
+      (member) =>
+        member.mergedOriginalStatus &&
+        member.mergedOriginalMonthlyRent !== null &&
+        member.mergedOriginalMonthlyRent !== undefined &&
+        member.mergedOriginalSecurityDeposit !== null &&
+        member.mergedOriginalSecurityDeposit !== undefined,
+    );
+    if (freshCombinedAgreement) {
+      agreement.status = "CANCELLED";
+      for (const member of members) {
+        member.startDate = member.mergedOriginalStartDate ?? member.startDate;
+        member.endDate = member.mergedOriginalEndDate ?? member.endDate;
+        member.agreementYear = member.mergedOriginalAgreementYear ?? member.agreementYear;
+        member.monthlyRent = member.mergedOriginalMonthlyRent ?? member.monthlyRent;
+        member.securityDeposit = member.mergedOriginalSecurityDeposit ?? member.securityDeposit;
+        member.status = approvedAfterMerge ? "DRAFT" : member.mergedOriginalStatus ?? "DRAFT";
+        member.ownerApprovedAt = approvedAfterMerge ? null : member.mergedOriginalOwnerApprovedAt ?? null;
+        member.tenantApprovedAt = approvedAfterMerge ? null : member.mergedOriginalTenantApprovedAt ?? null;
+        member.mandatoryDetailsApprovedAt = approvedAfterMerge
+          ? null
+          : member.mergedOriginalMandatoryDetailsApprovedAt ?? null;
+        member.mergedIntoAgreementId = null;
+        member.mergedOriginalStatus = null;
+        member.mergedOriginalStartDate = null;
+        member.mergedOriginalEndDate = null;
+        member.mergedOriginalAgreementYear = null;
+        member.mergedOriginalMonthlyRent = null;
+        member.mergedOriginalSecurityDeposit = null;
+        member.mergedOriginalOwnerApprovedAt = null;
+        member.mergedOriginalTenantApprovedAt = null;
+        member.mergedOriginalMandatoryDetailsApprovedAt = null;
+      }
+      await writeStore(store);
+      return { agreement, splitCount: members.length };
+    }
+
+    if (!agreement.mergedOriginalStatus) {
+      throw new DevAgreementMergeError("This agreement has incomplete merge data and cannot be split.");
+    }
+    agreement.monthlyRent = agreement.mergedOriginalMonthlyRent ?? agreement.monthlyRent;
+    agreement.securityDeposit = agreement.mergedOriginalSecurityDeposit ?? agreement.securityDeposit;
+    agreement.startDate = agreement.mergedOriginalStartDate ?? agreement.startDate;
+    agreement.endDate = agreement.mergedOriginalEndDate ?? agreement.endDate;
+    agreement.agreementYear = agreement.mergedOriginalAgreementYear ?? agreement.agreementYear;
+    agreement.status = approvedAfterMerge ? "DRAFT"     : agreement.mergedOriginalStatus === "ACTIVE" ? "ACTIVE" : "DRAFT";
+    agreement.ownerApprovedAt = approvedAfterMerge ? null : agreement.mergedOriginalOwnerApprovedAt ?? null;
+    agreement.tenantApprovedAt = approvedAfterMerge ? null : agreement.mergedOriginalTenantApprovedAt ?? null;
+    agreement.mandatoryDetailsApprovedAt = approvedAfterMerge
+      ? null
+      : agreement.mergedOriginalMandatoryDetailsApprovedAt ?? null;
+    agreement.mergedOriginalStatus = null;
+    agreement.mergedOriginalStartDate = null;
+    agreement.mergedOriginalEndDate = null;
+    agreement.mergedOriginalAgreementYear = null;
+    agreement.mergedOriginalMonthlyRent = null;
+    agreement.mergedOriginalSecurityDeposit = null;
+    agreement.mergedOriginalOwnerApprovedAt = null;
+    agreement.mergedOriginalTenantApprovedAt = null;
+    agreement.mergedOriginalMandatoryDetailsApprovedAt = null;
+    for (const member of members) {
+      member.status = approvedAfterMerge
+        ? "DRAFT"
+        : member.mergedOriginalStatus ?? "DRAFT";
+      member.ownerApprovedAt = approvedAfterMerge ? null : member.ownerApprovedAt ?? null;
+      member.tenantApprovedAt = approvedAfterMerge ? null : member.tenantApprovedAt ?? null;
+      member.mandatoryDetailsApprovedAt = approvedAfterMerge
+        ? null
+        : member.mandatoryDetailsApprovedAt ?? null;
+      member.mergedIntoAgreementId = null;
+      member.mergedOriginalStatus = null;
+    }
+    await writeStore(store);
+    return { agreement, splitCount: members.length + 1 };
   });
 }
 
@@ -1479,7 +1907,14 @@ export function getDevTenantPortal(mobileNumber: string) {
     const buildings = store.buildings.filter((entry) =>
       assets.some((asset) => asset.buildingId === entry.id),
     );
-    const agreements = store.agreements.filter((entry) => entry.tenantId === tenant.id);
+    const agreements = store.agreements
+      .filter((entry) => entry.tenantId === tenant.id && !entry.mergedIntoAgreementId)
+      .map((agreement) => ({
+        ...agreement,
+        mergedAssetIds: store.agreements
+          .filter((entry) => entry.mergedIntoAgreementId === agreement.id)
+          .map((entry) => entry.assetId),
+      }));
     return { tenant, assets, buildings, agreements };
   });
 }

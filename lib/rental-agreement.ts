@@ -33,7 +33,8 @@ export type AgreementStatus =
   | "Draft"
   | "Awaiting owner approval"
   | "Owner approved"
-  | "Approved";
+  | "Approved"
+  | "Cancelled";
 
 export function getAgreementStatus(endDate: string, today = new Date()): AgreementStatus | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(endDate);

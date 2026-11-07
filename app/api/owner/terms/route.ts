@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/database";
 import { getOwnerSession } from "@/lib/session";
+import { requireAgreementReapprovalForAssets } from "@/lib/agreement-approval-invalidation";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -12,6 +14,20 @@ function isIdList(value: unknown): value is string[] {
     value.length <= 1000 &&
     value.every((entry) => typeof entry === "string" && entry.length > 0) &&
     new Set(value).size === value.length;
+}
+
+async function invalidateMappedAgreements(
+  transaction: Prisma.TransactionClient,
+  templateId: string,
+) {
+  const mappings = await transaction.assetTermTemplate.findMany({
+    where: { templateId },
+    select: { assetId: true },
+  });
+  await requireAgreementReapprovalForAssets(
+    transaction,
+    mappings.map(({ assetId }) => assetId),
+  );
 }
 
 export async function GET() {
@@ -140,7 +156,7 @@ export async function POST(request: Request) {
           orderBy: { position: "desc" },
           select: { position: true },
         });
-        return transaction.ownerTermItem.create({
+        const created = await transaction.ownerTermItem.create({
           data: {
             id: randomUUID(),
             templateId: template.id,
@@ -149,6 +165,8 @@ export async function POST(request: Request) {
             importantObligation: body.importantObligation === true,
           },
         });
+        await invalidateMappedAgreements(transaction, template.id);
+        return created;
       });
       return NextResponse.json({ item }, { status: 201 });
     }
@@ -158,9 +176,17 @@ export async function POST(request: Request) {
       if (!name || name.length > 120) {
         return NextResponse.json({ error: "Enter a heading of 1 to 120 characters." }, { status: 400 });
       }
-      const updated = await prisma.ownerTermTemplate.update({
-        where: { id: template.id },
-        data: { name },
+      const updated = await prisma.$transaction(async (transaction) => {
+        const current = await transaction.ownerTermTemplate.findUnique({
+          where: { id: template.id },
+          select: { name: true },
+        });
+        const result = await transaction.ownerTermTemplate.update({
+          where: { id: template.id },
+          data: { name },
+        });
+        if (current?.name !== name) await invalidateMappedAgreements(transaction, template.id);
+        return result;
       });
       return NextResponse.json({ template: updated });
     }
@@ -174,16 +200,25 @@ export async function POST(request: Request) {
       if (!itemId || !text || text.length > 1000) {
         return NextResponse.json({ error: "Enter a term of 1 to 1,000 characters." }, { status: 400 });
       }
-      const item = await prisma.ownerTermItem.updateMany({
-        where: { id: itemId, templateId: template.id },
-        data: {
-          text,
-          ...(typeof body.importantObligation === "boolean"
-            ? { importantObligation: body.importantObligation }
-            : {}),
-        },
+      const item = await prisma.$transaction(async (transaction) => {
+        const current = await transaction.ownerTermItem.findFirst({
+          where: { id: itemId, templateId: template.id },
+          select: { text: true, importantObligation: true },
+        });
+        if (!current) return false;
+        const nextImportantObligation = typeof body.importantObligation === "boolean"
+          ? body.importantObligation
+          : current.importantObligation;
+        await transaction.ownerTermItem.update({
+          where: { id: itemId },
+          data: { text, importantObligation: nextImportantObligation },
+        });
+        if (current.text !== text || current.importantObligation !== nextImportantObligation) {
+          await invalidateMappedAgreements(transaction, template.id);
+        }
+        return true;
       });
-      if (!item.count) {
+      if (!item) {
         return NextResponse.json({ error: "Term not found in this heading." }, { status: 404 });
       }
       return NextResponse.json({ success: true });
@@ -199,6 +234,7 @@ export async function POST(request: Request) {
           where: { id: itemId, templateId: template.id },
         });
         if (!item) return false;
+        await invalidateMappedAgreements(transaction, template.id);
         await transaction.ownerTermItem.delete({ where: { id: item.id } });
         const remaining = await transaction.ownerTermItem.findMany({
           where: { templateId: template.id },
@@ -229,9 +265,10 @@ export async function POST(request: Request) {
       if (!isIdList(body.assetIds)) {
         return NextResponse.json({ error: "Select up to 1,000 valid properties." }, { status: 400 });
       }
+      const requestedAssetIds = body.assetIds;
       const assets = await prisma.asset.findMany({
         where: {
-          id: { in: body.assetIds },
+          id: { in: requestedAssetIds },
           building: {
             OR: [
               { ownerId: owner.id },
@@ -241,18 +278,29 @@ export async function POST(request: Request) {
         },
         select: { id: true },
       });
-      if (assets.length !== body.assetIds.length) {
+      if (assets.length !== requestedAssetIds.length) {
         return NextResponse.json({ error: "One or more selected properties are not in your account." }, { status: 404 });
       }
-      await prisma.$transaction([
-        prisma.assetTermTemplate.deleteMany({
-          where: { templateId: template.id, assetId: { notIn: body.assetIds } },
-        }),
-        prisma.assetTermTemplate.createMany({
-          data: body.assetIds.map((assetId) => ({ assetId, templateId: template.id })),
+      await prisma.$transaction(async (transaction) => {
+        const current = await transaction.assetTermTemplate.findMany({
+          where: { templateId: template.id },
+          select: { assetId: true },
+        });
+        const currentIds = new Set(current.map(({ assetId }) => assetId));
+        const nextIds = new Set(requestedAssetIds);
+        const changedIds = [
+          ...current.filter(({ assetId }) => !nextIds.has(assetId)).map(({ assetId }) => assetId),
+          ...requestedAssetIds.filter((assetId) => !currentIds.has(assetId)),
+        ];
+        await transaction.assetTermTemplate.deleteMany({
+          where: { templateId: template.id, assetId: { notIn: requestedAssetIds } },
+        });
+        await transaction.assetTermTemplate.createMany({
+          data: requestedAssetIds.map((assetId) => ({ assetId, templateId: template.id })),
           skipDuplicates: true,
-        }),
-      ]);
+        });
+        await requireAgreementReapprovalForAssets(transaction, changedIds);
+      });
       return NextResponse.json({ success: true });
     }
 
@@ -275,22 +323,31 @@ export async function POST(request: Request) {
       if (!asset) {
         return NextResponse.json({ error: "Property not found in your account." }, { status: 404 });
       }
-      if (body.mapped) {
-        await prisma.assetTermTemplate.upsert({
+      await prisma.$transaction(async (transaction) => {
+        const current = await transaction.assetTermTemplate.findUnique({
           where: { assetId_templateId: { assetId: asset.id, templateId: template.id } },
-          create: { assetId: asset.id, templateId: template.id },
-          update: {},
+          select: { assetId: true },
         });
-      } else {
-        await prisma.assetTermTemplate.deleteMany({
-          where: { assetId: asset.id, templateId: template.id },
-        });
-      }
+        if (body.mapped && !current) {
+          await transaction.assetTermTemplate.create({
+            data: { assetId: asset.id, templateId: template.id },
+          });
+          await requireAgreementReapprovalForAssets(transaction, [asset.id]);
+        } else if (!body.mapped && current) {
+          await transaction.assetTermTemplate.delete({
+            where: { assetId_templateId: { assetId: asset.id, templateId: template.id } },
+          });
+          await requireAgreementReapprovalForAssets(transaction, [asset.id]);
+        }
+      });
       return NextResponse.json({ success: true });
     }
 
     if (body.action === "delete-template") {
-      await prisma.ownerTermTemplate.delete({ where: { id: template.id } });
+      await prisma.$transaction(async (transaction) => {
+        await invalidateMappedAgreements(transaction, template.id);
+        await transaction.ownerTermTemplate.delete({ where: { id: template.id } });
+      });
       return NextResponse.json({ success: true });
     }
 

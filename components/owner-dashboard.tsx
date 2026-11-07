@@ -25,7 +25,7 @@ import AgreementApprovalWizard, {
   type ReviewableAgreement,
 } from "@/components/agreement-approval-wizard";
 import PartyAddressInputs from "@/components/party-address-inputs";
-import { formatPartyAddress, type PartyAddressFields } from "@/lib/party-address";
+import { formatPartyAddress } from "@/lib/party-address";
 
 type Company = { id: string; name: string };
 type Building = {
@@ -114,9 +114,13 @@ type Agreement = {
   templateTerms?: AgreementTermGroup[];
   status?: string;
   agreementYear?: number;
+  agreementDurationUnit?: "MONTH" | "YEAR";
+  agreementDurationValue?: number;
   ownerApprovedAt?: string | null;
   tenantApprovedAt?: string | null;
   mandatoryDetailsApprovedAt?: string | null;
+  mergedIntoAgreementId?: string | null;
+  mergedAssetIds?: string[];
   createdAt: string;
 };
 type AgreementApprovalFilter = "approved" | "not-approved";
@@ -284,16 +288,33 @@ export default function OwnerDashboard() {
   const [agreementApprovalFilter, setAgreementApprovalFilter] =
     useState<AgreementApprovalFilter>("approved");
   const [reviewingAgreementId, setReviewingAgreementId] = useState<string | null>(null);
+  const [agreementMergeBusy, setAgreementMergeBusy] = useState(false);
+  const [agreementMergeError, setAgreementMergeError] = useState("");
   const [selectedApprovalYear, setSelectedApprovalYear] = useState("all");
   const [selectedApprovalBuildingId, setSelectedApprovalBuildingId] = useState("");
   const [tenantTab, setTenantTab] = useState<TenantTab>("kyc");
+  const [tenantAgreementYearSelection, setTenantAgreementYearSelection] = useState<{
+    tenantId: string;
+    year: number;
+  } | null>(null);
+  const [tenantMergeSelection, setTenantMergeSelection] = useState<{
+    tenantId: string;
+    assetIds: string[];
+  } | null>(null);
   const [tenantShareLink, setTenantShareLink] = useState<{ tenantId: string; url: string } | null>(null);
   const [tenantShareError, setTenantShareError] = useState<{ tenantId: string; message: string } | null>(null);
   const [tenantShareBusy, setTenantShareBusy] = useState(false);
   const [tenantShareCopiedFor, setTenantShareCopiedFor] = useState<string | null>(null);
   const [selectedTenantBuildingId, setSelectedTenantBuildingId] = useState("");
   const [selectedAssetBuildingId, setSelectedAssetBuildingId] = useState("");
-  const [selectedAgreementBuildingId, setSelectedAgreementBuildingId] = useState("");
+  const [agreementBuildingSelection, setAgreementBuildingSelection] = useState({
+    year: null as string | null,
+    buildingId: "",
+  });
+  const selectedAgreementBuildingId =
+    agreementBuildingSelection.year === selectedAgreementYear
+      ? agreementBuildingSelection.buildingId
+      : "";
   const selectionScope = `${selectedModule}:${selectedAgreementYear ?? "all"}:${selectedAgreementBuildingId}:${selectedAssetBuildingId}:${selectedTenantBuildingId}`;
   const selectedRecordIds =
     recordSelection.scope === selectionScope ? recordSelection.ids : [];
@@ -325,10 +346,6 @@ export default function OwnerDashboard() {
     const timer = window.setTimeout(() => void loadPortfolio(), 0);
     return () => window.clearTimeout(timer);
   }, [loadPortfolio]);
-
-  useEffect(() => {
-    setSelectedAgreementBuildingId("");
-  }, [selectedAgreementYear]);
 
   useEffect(() => {
     if (selectedModule !== "companies" || companySection !== "owner") return;
@@ -855,6 +872,49 @@ export default function OwnerDashboard() {
     setReviewingAgreementId(agreementId);
   }
 
+  async function mergeAgreements(agreements: Agreement[], assets: Asset[]) {
+    if (agreements.length < 2) return;
+    const assetNames = assets.map((asset) => `${asset.name} · Unit ${asset.unitNumber}`).join(", ");
+    if (!window.confirm(
+      `Create one combined draft for the ${assets.length} selected assets and cancel their current agreements?\n\n${assetNames}\n\nYou can split the combined agreement later from the asset records to restore separate agreements.`,
+    )) return;
+    setAgreementMergeBusy(true);
+    setAgreementMergeError("");
+    try {
+      const response = await fetch("/api/owner/agreements/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreementIds: agreements.map((agreement) => agreement.id) }),
+      });
+      const payload = await response.json() as { error?: string; agreement?: Agreement };
+      if (!response.ok) throw new Error(payload.error || "Unable to merge these agreements.");
+      await loadPortfolio();
+      if (payload.agreement) openAgreementReview(payload.agreement.id);
+      setTenantMergeSelection(null);
+    } catch (cause) {
+      setAgreementMergeError(cause instanceof Error ? cause.message : "Unable to merge these agreements.");
+    } finally {
+      setAgreementMergeBusy(false);
+    }
+  }
+
+  async function splitAgreement(agreementId: string) {
+    setAgreementMergeBusy(true);
+    setAgreementMergeError("");
+    try {
+      const response = await fetch(`/api/owner/agreements/${encodeURIComponent(agreementId)}/split`, {
+        method: "POST",
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Unable to split this agreement.");
+      await loadPortfolio();
+    } catch (cause) {
+      setAgreementMergeError(cause instanceof Error ? cause.message : "Unable to split this agreement.");
+    } finally {
+      setAgreementMergeBusy(false);
+    }
+  }
+
   async function downloadAgreementDocument(
     agreementId: string,
     agreementNumber: string,
@@ -1178,9 +1238,59 @@ export default function OwnerDashboard() {
   const selectedTenantAgreements = selectedTenant
     ? portfolio.agreements.filter((agreement) => agreement.tenantId === selectedTenant.id)
     : [];
+  const selectedTenantAgreementYears = [...new Set(selectedTenantAgreements.map((agreement) =>
+    agreement.agreementYear ?? Number(agreement.startDate.slice(0, 4)),
+  ))]
+    .filter(Number.isInteger)
+    .sort((left, right) => right - left);
+  const activeTenantAgreementYear = selectedTenant && tenantAgreementYearSelection?.tenantId === selectedTenant.id &&
+    selectedTenantAgreementYears.includes(tenantAgreementYearSelection.year)
+    ? tenantAgreementYearSelection.year
+    : selectedTenantAgreementYears[0] ?? null;
+  const visibleTenantAgreements = activeTenantAgreementYear === null
+    ? []
+    : selectedTenantAgreements.filter(
+      (agreement) =>
+        (agreement.agreementYear ?? Number(agreement.startDate.slice(0, 4))) === activeTenantAgreementYear,
+    );
   const selectedTenantAssets = selectedTenant
     ? portfolio.assets.filter((asset) => selectedTenant.assetIds.includes(asset.id))
     : [];
+  const currentTenantMergeSelection = selectedTenant &&
+    tenantMergeSelection?.tenantId === selectedTenant.id
+    ? tenantMergeSelection.assetIds
+    : [];
+  const mergeableTenantAgreements = selectedTenantAgreements.filter(
+    (agreement) =>
+      (agreement.status === "ACTIVE" || agreement.status === "DRAFT") &&
+      !agreement.mergedAssetIds?.length,
+  );
+  const tenantMergeAgreementByAsset = new Map<string, Agreement>();
+  for (const agreement of mergeableTenantAgreements) {
+    const existing = tenantMergeAgreementByAsset.get(agreement.assetId);
+    if (
+      !existing ||
+      (agreement.agreementYear ?? Number(agreement.startDate.slice(0, 4))) >
+        (existing.agreementYear ?? Number(existing.startDate.slice(0, 4))) ||
+      ((agreement.agreementYear ?? Number(agreement.startDate.slice(0, 4))) ===
+        (existing.agreementYear ?? Number(existing.startDate.slice(0, 4))) &&
+        agreement.createdAt > existing.createdAt)
+    ) {
+      tenantMergeAgreementByAsset.set(agreement.assetId, agreement);
+    }
+  }
+  const selectedTenantMergeAssets = selectedTenantAssets.filter((asset) =>
+    currentTenantMergeSelection.includes(asset.id),
+  );
+  const selectedTenantMergeAgreements = selectedTenantMergeAssets
+    .map((asset) => tenantMergeAgreementByAsset.get(asset.id))
+    .filter((agreement): agreement is Agreement => Boolean(agreement));
+  const selectedAssetMergedAgreement = selectedAsset
+    ? portfolio.agreements.find((agreement) =>
+      agreement.mergedAssetIds?.length &&
+      (agreement.assetId === selectedAsset.id || agreement.mergedAssetIds.includes(selectedAsset.id)),
+    ) ?? null
+    : null;
   const formAgreementAsset = portfolio.assets.find((asset) => asset.id === form.assetId);
 
   function handleOpenAgreement(agreementId: string) {
@@ -1650,20 +1760,57 @@ export default function OwnerDashboard() {
                 ) : null}
                 {tenantTab === "assets" ? (
                   selectedTenantAssets.length ? (
-                    <div className="overflow-x-auto">
-                      <table aria-label="Currently assigned tenant assets" className="w-full min-w-[680px] border-collapse text-left">
+                    <div>
+                      <div className="flex flex-col gap-3 border-b border-[#edf0ed] px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+                        <div>
+                          <h3 className="text-[14px] font-semibold text-[#203328]">Assigned assets</h3>
+                          <p className="mt-1 text-[10px] text-[#849188]">Select assets here to create one combined agreement for approval.</p>
+                        </div>
+                        {selectedTenantMergeAssets.length >= 2 ? (
+                          <button
+                            type="button"
+                            disabled={agreementMergeBusy || selectedTenantMergeAgreements.length !== selectedTenantMergeAssets.length}
+                            onClick={() => void mergeAgreements(selectedTenantMergeAgreements, selectedTenantMergeAssets)}
+                            title="Cancel the selected assets' current agreements and create one combined draft for approval."
+                            className="h-9 shrink-0 rounded-lg bg-[#176b4b] px-3 text-[10px] font-semibold text-white hover:bg-[#12583e] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {agreementMergeBusy ? "Working..." : `Create one agreement · ${selectedTenantMergeAssets.length} assets`}
+                          </button>
+                        ) : null}
+                      </div>
+                      {selectedTenantAssets.some((asset) =>
+                        !tenantMergeAgreementByAsset.has(asset.id) &&
+                        !selectedTenantAgreements.some((agreement) =>
+                          agreement.mergedAssetIds?.length &&
+                          (agreement.assetId === asset.id || agreement.mergedAssetIds.includes(asset.id)),
+                        ),
+                      ) ? (
+                        <p className="px-5 pb-3 text-[10px] text-[#849188] sm:px-6">
+                          An asset needs an active or draft agreement before it can be combined. Assets already in a combined agreement can be split from this list.
+                        </p>
+                      ) : null}
+                      {agreementMergeError ? <p role="alert" className="mx-5 mb-3 rounded-lg bg-[#fff4ed] px-3 py-2 text-[10px] text-[#995634] sm:mx-6">{agreementMergeError}</p> : null}
+                      <div className="overflow-x-auto">
+                      <table aria-label="Currently assigned tenant assets" className="w-full min-w-[820px] border-collapse text-left">
                         <thead className="bg-[#f7faf7] text-[9px] font-semibold uppercase tracking-[0.1em] text-[#718078]">
                           <tr>
+                            <th scope="col" className="px-5 py-3"><span className="sr-only">Select asset</span></th>
                             <th scope="col" className="px-5 py-3">Asset ID</th>
                             <th scope="col" className="px-5 py-3">Asset</th>
                             <th scope="col" className="px-5 py-3">Building</th>
                             <th scope="col" className="px-5 py-3">Rent / month</th>
                             <th scope="col" className="px-5 py-3">Advance</th>
+                            <th scope="col" className="px-5 py-3">Agreement action</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[#edf0ed]">
                           {selectedTenantAssets.map((asset) => {
                             const building = portfolio.buildings.find((entry) => entry.id === asset.buildingId);
+                            const mergedAgreement = selectedTenantAgreements.find((agreement) =>
+                              agreement.mergedAssetIds?.length &&
+                              (agreement.assetId === asset.id || agreement.mergedAssetIds.includes(asset.id)),
+                            );
+                            const canSelectForMerge = tenantMergeAgreementByAsset.has(asset.id) && !mergedAgreement;
                             return (
                               <tr
                                 key={asset.id}
@@ -1678,16 +1825,64 @@ export default function OwnerDashboard() {
                                 }}
                                 className="cursor-pointer text-[11px] text-[#33473a] transition hover:bg-[#f7faf7] focus:bg-[#f7faf7] focus:outline-none"
                               >
+                                <td className="px-5 py-4" onClick={(event) => event.stopPropagation()}>
+                                  <input
+                                    type="checkbox"
+                                    aria-label={`Select asset ${asset.unitNumber} for combined agreement`}
+                                    checked={currentTenantMergeSelection.includes(asset.id)}
+                                    disabled={agreementMergeBusy || !canSelectForMerge}
+                                    onChange={(event) => {
+                                      setTenantMergeSelection((current) => {
+                                        const ids = current?.tenantId === selectedTenant.id
+                                          ? current.assetIds
+                                          : [];
+                                        return {
+                                          tenantId: selectedTenant.id,
+                                          assetIds: event.target.checked
+                                            ? [...ids, asset.id]
+                                            : ids.filter((id) => id !== asset.id),
+                                        };
+                                      });
+                                    }}
+                                    className="size-4 accent-[#176b4b] disabled:cursor-not-allowed disabled:opacity-40"
+                                  />
+                                </td>
                                 <td className="px-5 py-4 font-semibold text-[#203328]">{asset.unitNumber}</td>
                                 <td className="px-5 py-4">{asset.name}</td>
                                 <td className="px-5 py-4">{building?.name ?? "—"}</td>
                                 <td className="px-5 py-4">₹{asset.monthlyRent.toLocaleString("en-IN")}</td>
                                 <td className="px-5 py-4">₹{asset.securityDeposit.toLocaleString("en-IN")}</td>
+                                <td className="px-5 py-4" onClick={(event) => event.stopPropagation()}>
+                                  {mergedAgreement?.assetId === asset.id ? (
+                                    <button
+                                      type="button"
+                                      disabled={agreementMergeBusy}
+                                      onClick={() => void splitAgreement(mergedAgreement.id)}
+                                      title={`Split combined agreement ${mergedAgreement.agreementNumber} and restore separate asset agreements.`}
+                                      className="rounded-lg border border-[#dfe8e1] bg-white px-3 py-2 text-[9px] font-semibold text-[#355942] hover:bg-[#f1f6f2] disabled:opacity-60"
+                                    >
+                                      {agreementMergeBusy ? "Working..." : "Split agreement"}
+                                    </button>
+                                  ) : mergedAgreement ? (
+                                    <span className="text-[9px] text-[#849188]">
+                                      Part of {mergedAgreement.agreementNumber}
+                                    </span>
+                                  ) : canSelectForMerge ? (
+                                    <span className="text-[9px] text-[#849188]">
+                                      {tenantMergeAgreementByAsset.get(asset.id)?.agreementNumber}
+                                    </span>
+                                  ) : (
+                                    <span className="text-[9px] text-[#849188]">
+                                      {tenantMergeAgreementByAsset.has(asset.id) ? "Already combined" : "No active agreement"}
+                                    </span>
+                                  )}
+                                </td>
                               </tr>
                             );
                           })}
                         </tbody>
                       </table>
+                      </div>
                     </div>
                   ) : (
                     <p className="px-5 py-6 text-[11px] text-[#849188]">No assets are currently assigned to this tenant.</p>
@@ -1695,22 +1890,57 @@ export default function OwnerDashboard() {
                 ) : null}
                 {tenantTab === "agreements" ? (
                   <div>
-                    <div className="px-5 py-4 sm:px-6">
-                      <h3 className="text-[14px] font-semibold text-[#203328]">Rental agreements</h3>
-                      <p className="mt-1 text-[10px] text-[#849188]">All agreements associated with this tenant.</p>
+                    <div className="flex flex-col justify-between gap-3 px-5 py-4 sm:flex-row sm:items-center sm:px-6">
+                      <div>
+                        <h3 className="text-[14px] font-semibold text-[#203328]">Rental agreements</h3>
+                        <p className="mt-1 text-[10px] text-[#849188]">All agreements associated with this tenant.</p>
+                        {selectedTenantAgreementYears.length > 0 ? (
+                          <div role="tablist" aria-label="Filter agreements by year" className="mt-3 flex flex-wrap gap-2">
+                            {selectedTenantAgreementYears.map((year) => {
+                              const count = selectedTenantAgreements.filter(
+                                (agreement) =>
+                                  (agreement.agreementYear ?? Number(agreement.startDate.slice(0, 4))) === year,
+                              ).length;
+                              const selected = activeTenantAgreementYear === year;
+                              return (
+                                <button
+                                  key={year}
+                                  type="button"
+                                  role="tab"
+                                  aria-selected={selected}
+                                  onClick={() => {
+                                    if (selectedTenant) setTenantAgreementYearSelection({ tenantId: selectedTenant.id, year });
+                                  }}
+                                  className={`rounded-lg border px-3 py-2 text-[10px] font-semibold transition ${
+                                    selected
+                                      ? "border-[#176b4b] bg-[#176b4b] text-white"
+                                      : "border-[#dfe8e1] bg-white text-[#54705d] hover:bg-[#f1f6f2]"
+                                  }`}
+                                >
+                                  {year} <span className={selected ? "text-white/75" : "text-[#849188]"}>({count})</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
-                    {selectedTenantAgreements.length ? (
+                    {visibleTenantAgreements.length ? (
                       <div className="divide-y divide-[#edf0ed]">
-                        {selectedTenantAgreements.map((agreement) => {
+                        {visibleTenantAgreements.map((agreement) => {
                           const asset = portfolio.assets.find((entry) => entry.id === agreement.assetId);
+                          const agreementAssets = [...new Set([agreement.assetId, ...(agreement.mergedAssetIds ?? [])])]
+                            .map((assetId) => portfolio.assets.find((entry) => entry.id === assetId))
+                            .filter((entry): entry is Asset => Boolean(entry));
                           return (
                             <div key={agreement.id} className="flex flex-col gap-2 px-5 py-4 sm:px-6">
-                              <div>
+                              <div className="flex items-start gap-3">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <button type="button" onClick={() => handleOpenAgreement(agreement.id)} className="text-left text-[12px] font-semibold text-[#203328] hover:text-[#176b4b] hover:underline">{agreement.agreementNumber}</button>
-                                  <AgreementStatusBadge status={getAgreementStatus(agreement.endDate)} />
+                                  {agreement.mergedAssetIds?.length ? <span className="rounded-full bg-[#eef4ff] px-2 py-1 text-[9px] font-semibold text-[#37557a]">Merged · {agreementAssets.length} units</span> : null}
+                                  <AgreementStatusBadge status={agreement.status === "DRAFT" ? "Draft" : agreement.status === "CANCELLED" ? "Cancelled" : getAgreementStatus(agreement.endDate)} />
                                 </div>
-                                <p className="mt-1 text-[10px] text-[#849188]">{asset ? `${asset.name} · Unit ${asset.unitNumber}` : "Asset not found"}</p>
+                                <p className="mt-1 text-[10px] text-[#849188]">{agreementAssets.length ? agreementAssets.map((entry) => `${entry.name} · Unit ${entry.unitNumber}`).join(", ") : asset ? `${asset.name} · Unit ${asset.unitNumber}` : "Asset not found"}</p>
                               </div>
                               <AgreementFacts
                                 startDate={agreement.startDate}
@@ -1723,7 +1953,7 @@ export default function OwnerDashboard() {
                           );
                         })}
                       </div>
-                    ) : <p className="px-5 pb-5 text-[11px] text-[#849188] sm:px-6">No agreements for this tenant yet.</p>}
+                    ) : <p className="px-5 pb-5 text-[11px] text-[#849188] sm:px-6">No agreements for this year.</p>}
                   </div>
                 ) : null}
               </div>
@@ -1738,10 +1968,22 @@ export default function OwnerDashboard() {
                 </div>
                 <div className="flex items-center gap-2">
                   <button type="button" onClick={startRecordEdit} className="rounded-lg border border-[#dfe8e1] bg-[#f7faf7] px-3 py-2 text-[10px] font-semibold text-[#355942]">Edit</button>
+                  {selectedAssetMergedAgreement ? (
+                    <button
+                      type="button"
+                      disabled={agreementMergeBusy}
+                      onClick={() => void splitAgreement(selectedAssetMergedAgreement.id)}
+                      title={`Split combined agreement ${selectedAssetMergedAgreement.agreementNumber} and restore separate asset agreements.`}
+                      className="rounded-lg border border-[#dfe8e1] bg-white px-3 py-2 text-[10px] font-semibold text-[#355942] disabled:opacity-60"
+                    >
+                      {agreementMergeBusy ? "Working..." : "Split combined agreement"}
+                    </button>
+                  ) : null}
                   <button type="button" onClick={() => void handleDeleteRecord(selectedAsset.id)} disabled={deletingRecordId !== null} className="rounded-lg border border-[#f0d9d2] bg-[#fff8f7] px-3 py-2 text-[10px] font-semibold text-[#9a4a3d] disabled:cursor-not-allowed disabled:opacity-60">Delete</button>
                   <button type="button" onClick={() => syncModuleUrl("assets")} className="rounded-lg border border-[#dfe8e1] bg-[#f5f8f5] px-3 py-2 text-[10px] font-semibold text-[#355942]">Back to assets</button>
                 </div>
               </div>
+              {agreementMergeError ? <p role="alert" className="mx-5 mt-4 rounded-lg bg-[#fff4ed] px-3 py-2 text-[10px] text-[#995634] sm:mx-6">{agreementMergeError}</p> : null}
               <div className="grid gap-4 p-5 sm:grid-cols-2 sm:p-6">
                 <DetailField label="Asset ID" value={selectedAsset.unitNumber} />
                 <DetailField label="Building name" value={selectedAssetBuilding?.name ?? "—"} />
@@ -1950,7 +2192,13 @@ export default function OwnerDashboard() {
                       <button
                         key={building.id}
                         type="button"
-                        onClick={() => setSelectedAgreementBuildingId((current) => current === building.id ? "" : building.id)}
+                        onClick={() => setAgreementBuildingSelection((current) => ({
+                          year: selectedAgreementYear,
+                          buildingId:
+                            current.year === selectedAgreementYear && current.buildingId === building.id
+                              ? ""
+                              : building.id,
+                        }))}
                         className={`shrink-0 rounded-lg px-3 py-1.5 text-[10px] font-semibold transition ${selectedAgreementBuildingId === building.id ? "bg-[#176b4b] text-white" : "border border-[#dfe8e1] bg-white text-[#355942] hover:bg-[#eff5f0]"}`}
                       >
                         {building.name}
@@ -2761,6 +3009,8 @@ function AgreementApprovalStatus({
 function AgreementStatusBadge({ status }: { status: AgreementStatus | null }) {
   const colorClass = status === "Expired"
     ? "bg-[#fff0ee] text-[#a8322a]"
+    : status === "Cancelled"
+      ? "bg-[#fff0ee] text-[#a8322a]"
     : status === "Expiring soon"
       ? "bg-[#fff7e8] text-[#9a6500]"
       : status === "Active" || status === "Approved"

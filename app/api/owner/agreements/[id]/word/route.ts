@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { generateAgreementWord } from "@/lib/agreement-word";
+import { agreementContentDisposition, agreementDownloadFilename } from "@/lib/agreement-download-filename";
 import { AgreementDownloadError, getOwnerAgreementPdfData } from "@/lib/owner-agreement-download";
 import { getOwnerSession } from "@/lib/session";
 
@@ -16,12 +17,14 @@ export async function GET(
 
   const { id } = await params;
   try {
-    const { data, safeName } = await getOwnerAgreementPdfData(session.mobileNumber, id);
+    const { data } = await getOwnerAgreementPdfData(session.mobileNumber, id);
     const wordBytes = await generateAgreementWord(data);
     return new Response(new Uint8Array(wordBytes), {
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "Content-Disposition": `attachment; filename="${safeName}.docx"`,
+        "Content-Disposition": agreementContentDisposition(
+          agreementDownloadFilename(data.tenantName, data.startDate, "docx"),
+        ),
         "Cache-Control": "private, no-store",
       },
     });

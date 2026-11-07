@@ -27,6 +27,7 @@ export type ReviewableAgreement = {
   }>;
   status: string;
   agreementYear?: number;
+  mergedAssetIds?: string[];
   ownerApprovedAt?: string | null;
   tenantApprovedAt?: string | null;
   mandatoryDetailsApprovedAt?: string | null;

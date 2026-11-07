@@ -43,6 +43,7 @@ export async function getPublicTenantData(token: string) {
         },
       },
       agreements: {
+        where: { mergedIntoAgreementId: null },
         orderBy: { startDate: "desc" },
         select: {
           id: true,
@@ -56,6 +57,14 @@ export async function getPublicTenantData(token: string) {
           status: true,
           ownerApprovedAt: true,
           tenantApprovedAt: true,
+          mandatoryDetailsApprovedAt: true,
+          mergedMembers: {
+            select: {
+              asset: {
+                select: { id: true, name: true, unitNumber: true, roomNumber: true },
+              },
+            },
+          },
           asset: {
             select: {
               id: true,
@@ -118,13 +127,18 @@ export async function getPublicTenantData(token: string) {
       city: asset.building.city,
       state: asset.building.state,
     })),
-    agreements: tenant.agreements.map(({ asset, ...agreement }) => ({
+    agreements: tenant.agreements.map(({ asset, mergedMembers, ...agreement }) => ({
       ...agreement,
+      mergedAssetIds: [...new Set(mergedMembers.map(({ asset: mergedAsset }) => mergedAsset.id))],
       startDate: agreement.startDate.toISOString().slice(0, 10),
       endDate: agreement.endDate.toISOString().slice(0, 10),
       ownerApprovedAt: agreement.ownerApprovedAt?.toISOString() ?? null,
       tenantApprovedAt: agreement.tenantApprovedAt?.toISOString() ?? null,
-      propertyName: `${asset.name} · Unit ${asset.unitNumber}`,
+      mandatoryDetailsApprovedAt: agreement.mandatoryDetailsApprovedAt?.toISOString() ?? null,
+      propertyName: [...new Map([asset, ...mergedMembers.map(({ asset: mergedAsset }) => mergedAsset)]
+        .map((entry) => [entry.id, entry])).values()]
+        .map((entry) => `${entry.name} · Unit ${entry.roomNumber ?? entry.unitNumber}`)
+        .join(", "),
       buildingName: asset.building.name,
       buildingAddress: [asset.building.city, asset.building.state].filter(Boolean).join(", "),
       assetId: asset.id,

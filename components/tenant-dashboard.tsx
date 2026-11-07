@@ -48,6 +48,7 @@ type Agreement = {
   status: string;
   ownerApprovedAt?: string | null;
   tenantApprovedAt?: string | null;
+  mergedAssetIds?: string[];
 };
 
 type TenantPortal = {
@@ -116,7 +117,7 @@ export default function TenantDashboard({ mobileNumber }: { mobileNumber: string
     if (!end) return true;
     return agreements.some(
       (agreement) =>
-        agreement.assetId === asset.id &&
+        (agreement.assetId === asset.id || agreement.mergedAssetIds?.includes(asset.id)) &&
         (agreement.startDate.slice(0, 4) === start.slice(0, 4) ||
           (agreement.status === "ACTIVE" &&
             agreement.startDate.slice(0, 10) <= end &&
@@ -207,7 +208,10 @@ export default function TenantDashboard({ mobileNumber }: { mobileNumber: string
             {loading ? <PanelMessage>Loading properties...</PanelMessage> : error ? <PanelMessage error>{error}</PanelMessage> : !assets.length ? <PanelMessage>No properties are linked to your tenant account yet. Ask your owner to add your registered mobile number to an asset.</PanelMessage> : (
               <div className="grid gap-4 p-5 sm:grid-cols-2 sm:p-6 xl:grid-cols-3">
                 {assets.map((asset) => {
-                  const existing = agreements.filter((agreement) => agreement.assetId === asset.id);
+                  const existing = agreements.filter(
+                    (agreement) =>
+                      agreement.assetId === asset.id || agreement.mergedAssetIds?.includes(asset.id),
+                  );
                   return <article key={asset.id} className="rounded-xl border border-[#e7ece7] bg-[#fcfdfc] p-5"><span className="grid size-9 place-items-center rounded-lg bg-[#edf4ef] text-[#37734d]"><Building2 size={17} /></span><h4 className="mt-4 text-[14px] font-semibold text-[#294034]">{asset.name} · {asset.unitNumber}</h4><p className="mt-1 text-[10px] text-[#718078]">{asset.assetType}{asset.buildingName ? ` · ${asset.buildingName}` : ""}</p><p className="mt-3 text-[11px] font-semibold text-[#315b41]">₹{asset.monthlyRent.toLocaleString("en-IN")} <span className="font-normal text-[#849188]">/ month</span></p><p className="mt-2 text-[9px] leading-4 text-[#849188]">{asset.buildingAddress}{asset.city ? `, ${asset.city}` : ""}{asset.state ? `, ${asset.state}` : ""}</p><div className="mt-4 flex items-center justify-between border-t border-[#edf0ed] pt-3"><span className="text-[9px] text-[#849188]">{existing.length ? `${existing.length} agreement${existing.length === 1 ? "" : "s"} in history` : "No agreement yet"}</span>{existing.length ? <button type="button" onClick={() => setSelectedAgreement(existing[0])} className="text-[9px] font-semibold text-[#286244] hover:underline">View latest</button> : <span className="rounded-full bg-[#edf5ef] px-2 py-1 text-[8px] font-semibold text-[#467253]">Available</span>}</div></article>;
                 })}
               </div>
@@ -222,9 +226,18 @@ export default function TenantDashboard({ mobileNumber }: { mobileNumber: string
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <p className="text-[11px] font-semibold text-[#3d5245]">{agreement.agreementNumber}</p>
-                      <p className="mt-1 text-[9px] text-[#849188]">{assets.find((asset) => asset.id === agreement.assetId)?.name}</p>
+                      <p className="mt-1 text-[9px] text-[#849188]">
+                        {[agreement.assetId, ...(agreement.mergedAssetIds ?? [])]
+                          .map((id) => assets.find((asset) => asset.id === id)?.name)
+                          .filter(Boolean)
+                          .join(", ")}
+                      </p>
                       <p className="mt-1 text-[9px] font-medium text-[#54705d]">
-                        {agreement.status === "DRAFT" && !agreement.ownerApprovedAt ? "Waiting for owner approval" : "Owner approved"}
+                        {agreement.status === "CANCELLED"
+                          ? "Cancelled"
+                          : agreement.status === "DRAFT" && !agreement.ownerApprovedAt
+                            ? "Waiting for owner approval"
+                            : "Owner approved"}
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">

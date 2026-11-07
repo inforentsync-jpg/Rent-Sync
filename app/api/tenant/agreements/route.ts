@@ -45,8 +45,12 @@ export async function GET() {
       where: { mobileNumber: session.mobileNumber },
       include: {
         agreements: {
+          where: { mergedIntoAgreementId: null },
           orderBy: { createdAt: "desc" },
           include: {
+            mergedMembers: {
+              select: { assetId: true },
+            },
             asset: {
               include: {
                 termTemplates: {
@@ -82,8 +86,9 @@ export async function GET() {
     });
     if (!tenant) return NextResponse.json({ error: "Tenant account was not found." }, { status: 404 });
     return NextResponse.json({
-      agreements: tenant.agreements.map(({ asset, ...agreement }) => ({
+      agreements: tenant.agreements.map(({ asset, mergedMembers, ...agreement }) => ({
         ...agreement,
+        mergedAssetIds: [...new Set(mergedMembers.map((member) => member.assetId))],
         templateTerms: asset.termTemplates.map(({ template }) => ({
           templateId: template.id,
           heading: template.name,

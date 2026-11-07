@@ -5,6 +5,7 @@ import { hashPassword } from "@/lib/password";
 import { getOwnerSession } from "@/lib/session";
 import { shouldUseDatabase } from "@/lib/storage-mode";
 import { formatPartyAddress, PARTY_ADDRESS_LIMITS } from "@/lib/party-address";
+import { requireAgreementReapprovalForOwner } from "@/lib/agreement-approval-invalidation";
 
 type ProfileInput = {
   fullName: string;
@@ -216,10 +217,37 @@ export async function PATCH(request: Request) {
         : await (async () => {
             const currentOwner = await prisma.propertyOwner.findUnique({
               where: { mobileNumber: session.mobileNumber },
-              select: { id: true },
+              select: {
+                id: true,
+                fullName: true,
+                aadhaarNumber: true,
+                fullAddress: true,
+                addressLine1: true,
+                addressLine2: true,
+                district: true,
+                state: true,
+                city: true,
+                postalCode: true,
+                fatherName: true,
+              },
             });
             if (!currentOwner) return null;
             return prisma.$transaction(async (transaction) => {
+              const nextAddress = formatPartyAddress({ addressLine1, addressLine2, district, state, city, postalCode }) || fullAddress || null;
+              const agreementDetailsChanged =
+                currentOwner.fullName !== fullName ||
+                currentOwner.aadhaarNumber !== (aadhaarNumber || null) ||
+                currentOwner.fullAddress !== nextAddress ||
+                currentOwner.addressLine1 !== (addressLine1 || null) ||
+                currentOwner.addressLine2 !== (addressLine2 || null) ||
+                currentOwner.district !== (district || null) ||
+                currentOwner.state !== (state || null) ||
+                currentOwner.city !== (city || null) ||
+                currentOwner.postalCode !== (postalCode || null) ||
+                currentOwner.fatherName !== (fatherName || null);
+              if (agreementDetailsChanged) {
+                await requireAgreementReapprovalForOwner(transaction, currentOwner.id);
+              }
               await transaction.building.updateMany({
                 where: { ownerId: currentOwner.id },
                 data: { ownerName: fullName },
@@ -230,7 +258,7 @@ export async function PATCH(request: Request) {
                   fullName,
                   email: email || null,
                   aadhaarNumber: aadhaarNumber || null,
-                  fullAddress: formatPartyAddress({ addressLine1, addressLine2, district, state, city, postalCode }) || fullAddress || null,
+                  fullAddress: nextAddress,
                   addressLine1: addressLine1 || null,
                   addressLine2: addressLine2 || null,
                   district: district || null,

@@ -145,28 +145,40 @@ model AssetTenant {
 }
 
 model RentalAgreement {
-  id                         String    @id @default(cuid())
-  agreementNumber            String    @unique @db.VarChar(40)
-  assetId                    String
-  tenantId                   String
-  agreementYear              Int
-  startDate                  DateTime  @db.Date
-  endDate                    DateTime  @db.Date
-  monthlyRent                Int
-  securityDeposit            Int       @default(0)
-  terms                      String    @db.Text
-  importantTerms             String    @default("") @db.Text
-  status                     String    @default("ACTIVE") @db.VarChar(20)
-  ownerApprovedAt            DateTime? @db.Timestamptz(6)
-  tenantApprovedAt           DateTime? @db.Timestamptz(6)
-  mandatoryDetailsApprovedAt DateTime? @db.Timestamptz(6)
-  createdAt                  DateTime  @default(now())
-  asset                      Asset     @relation(fields: [assetId], references: [id], onDelete: Restrict)
-  tenant                     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  id                                       String            @id @default(cuid())
+  agreementNumber                          String            @unique @db.VarChar(40)
+  assetId                                  String
+  tenantId                                 String
+  agreementYear                            Int
+  startDate                                DateTime          @db.Date
+  endDate                                  DateTime          @db.Date
+  monthlyRent                              Int
+  securityDeposit                          Int               @default(0)
+  terms                                    String            @db.Text
+  importantTerms                           String            @default("") @db.Text
+  status                                   String            @default("ACTIVE") @db.VarChar(20)
+  ownerApprovedAt                          DateTime?         @db.Timestamptz(6)
+  tenantApprovedAt                         DateTime?         @db.Timestamptz(6)
+  mandatoryDetailsApprovedAt               DateTime?         @db.Timestamptz(6)
+  mergedIntoAgreementId                    String?
+  mergedOriginalStatus                     String?           @db.VarChar(20)
+  mergedOriginalStartDate                  DateTime?         @db.Date
+  mergedOriginalEndDate                    DateTime?         @db.Date
+  mergedOriginalAgreementYear              Int?
+  mergedOriginalMonthlyRent                Int?
+  mergedOriginalSecurityDeposit            Int?
+  mergedOriginalOwnerApprovedAt            DateTime?         @db.Timestamptz(6)
+  mergedOriginalTenantApprovedAt           DateTime?         @db.Timestamptz(6)
+  mergedOriginalMandatoryDetailsApprovedAt DateTime?         @db.Timestamptz(6)
+  createdAt                                DateTime          @default(now())
+  asset                                    Asset             @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  tenant                                   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  mergedInto                               RentalAgreement?  @relation("AgreementMerge", fields: [mergedIntoAgreementId], references: [id], onDelete: SetNull)
+  mergedMembers                            RentalAgreement[] @relation("AgreementMerge")
 
-  @@unique([tenantId, assetId, agreementYear])
   @@index([assetId, startDate, endDate])
   @@index([tenantId, startDate])
+  @@index([mergedIntoAgreementId])
   @@map("rental_agreements")
 }
 

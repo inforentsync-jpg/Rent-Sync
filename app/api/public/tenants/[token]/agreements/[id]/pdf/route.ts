@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/database";
 import { generateAgreementPdf } from "@/lib/agreement-pdf.clean";
+import { agreementContentDisposition, agreementDownloadFilename } from "@/lib/agreement-download-filename";
 import { shouldUseDatabase } from "@/lib/storage-mode";
 
 export const dynamic = "force-dynamic";
@@ -37,7 +38,7 @@ export async function GET(
     }
 
     const agreement = await prisma.rentalAgreement.findFirst({
-      where: { id, tenantId: tenant.id },
+      where: { id, tenantId: tenant.id, mergedIntoAgreementId: null },
       include: {
         tenant: {
           select: {
@@ -57,6 +58,21 @@ export async function GET(
             },
           },
         },
+        mergedMembers: {
+          orderBy: { createdAt: "asc" },
+          include: {
+            asset: {
+              include: {
+                termTemplates: {
+                  orderBy: { template: { name: "asc" } },
+                  include: {
+                    template: { include: { items: { orderBy: { position: "asc" } } } },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
     if (!agreement) {
@@ -71,6 +87,32 @@ export async function GET(
 
     const { asset, tenant: agreementTenant } = agreement;
     const building = asset.building;
+    const mergedAssets = [...new Map(
+      [asset, ...agreement.mergedMembers.map((member) => member.asset)]
+        .map((mergedAsset) => [mergedAsset.id, mergedAsset]),
+    ).values()];
+    const templateTerms = mergedAssets.flatMap((mergedAsset) =>
+      mergedAsset.termTemplates.map(({ template }) => ({
+        heading: template.name,
+        items: template.items.map(({ position, text, importantObligation }) => ({
+          position,
+          text,
+          importantObligation,
+        })),
+      })),
+    );
+    const uniqueTemplateTerms = new Map<string, typeof templateTerms[number]>();
+    for (const group of templateTerms) {
+      const current = uniqueTemplateTerms.get(group.heading) ?? { heading: group.heading, items: [] };
+      const itemTexts = new Set(current.items.map((item) => item.text));
+      for (const item of group.items) {
+        if (!itemTexts.has(item.text)) {
+          current.items.push(item);
+          itemTexts.add(item.text);
+        }
+      }
+      uniqueTemplateTerms.set(group.heading, current);
+    }
     const bytes = await generateAgreementPdf({
       agreementNumber: agreement.agreementNumber,
       startDate: dateOnly(agreement.startDate),
@@ -104,28 +146,22 @@ export async function GET(
       city: building.city,
       state: building.state,
       postalCode: building.postalCode,
-      assetName: asset.name,
-      unitNumber: asset.unitNumber,
+      assetName: mergedAssets.map((entry) => entry.name).join(", "),
+      unitNumber: mergedAssets.map((entry) => entry.unitNumber).join(", "),
       assetType: asset.assetType,
-      ward: asset.ward,
+      ward: [...new Set(mergedAssets.map((entry) => entry.ward).filter(Boolean))].join(", ") || null,
       panchayat: building.panchayat,
-      roomNumber: asset.roomNumber ?? asset.unitNumber,
+      roomNumber: mergedAssets.map((entry) => entry.roomNumber ?? entry.unitNumber).join(", "),
       usageDescription: agreementTenant.businessNature ?? null,
       tradeName: agreementTenant.businessName ?? null,
-      templateTerms: asset.termTemplates.map(({ template }) => ({
-        heading: template.name,
-        items: template.items.map(({ position, text, importantObligation }) => ({
-          position,
-          text,
-          importantObligation,
-        })),
-      })),
+      templateTerms: [...uniqueTemplateTerms.values()],
     });
-    const safeName = agreement.agreementNumber.replace(/[^A-Za-z0-9_-]/g, "");
     return new Response(Buffer.from(bytes), {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="${safeName || "rental-agreement"}.pdf"`,
+        "Content-Disposition": agreementContentDisposition(
+          agreementDownloadFilename(agreementTenant.fullName, agreement.startDate, "pdf"),
+        ),
         "Cache-Control": "private, no-store",
       },
     });

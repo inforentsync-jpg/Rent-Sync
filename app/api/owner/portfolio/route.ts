@@ -23,6 +23,11 @@ import { getRenewalAgreementTerm } from "@/lib/agreement-year";
 import { shouldUseDatabase } from "@/lib/storage-mode";
 import { formatPartyAddress, PARTY_ADDRESS_LIMITS } from "@/lib/party-address";
 import {
+  requireAgreementReapprovalForAssets,
+  requireAgreementReapprovalForTenant,
+  syncAgreementAmountsFromAssets,
+} from "@/lib/agreement-approval-invalidation";
+import {
   addAgreementDuration,
   DEFAULT_AGREEMENT_DURATION_UNIT,
   DEFAULT_AGREEMENT_DURATION_VALUE,
@@ -39,6 +44,12 @@ class PortfolioNotFoundError extends Error {}
 
 function isRecord(value: unknown): value is PortfolioInput {
   return value !== null && typeof value === "object";
+}
+
+function hasChangedValues<T extends object>(current: T, next: Partial<T>) {
+  return (Object.keys(next) as Array<keyof T>).some(
+    (key) => current[key] !== next[key],
+  );
 }
 
 function text(input: PortfolioInput, key: string, maxLength = 255) {
@@ -125,7 +136,10 @@ export async function GET() {
                   orderBy: { createdAt: "desc" },
                   include: {
                     tenants: { include: { tenant: true } },
-                    agreements: { orderBy: { startDate: "desc" } },
+                    agreements: {
+                      orderBy: { startDate: "desc" },
+                      include: { mergedMembers: { select: { assetId: true } } },
+                    },
                     termTemplates: {
                       orderBy: { template: { name: "asc" } },
                       include: {
@@ -146,7 +160,10 @@ export async function GET() {
               orderBy: { createdAt: "desc" },
               include: {
                 tenants: { include: { tenant: true } },
-                agreements: { orderBy: { startDate: "desc" } },
+                agreements: {
+                  orderBy: { startDate: "desc" },
+                  include: { mergedMembers: { select: { assetId: true } } },
+                },
                 termTemplates: {
                   orderBy: { template: { name: "asc" } },
                   include: {
@@ -191,20 +208,34 @@ export async function GET() {
       })),
     );
     const agreements = assets.flatMap((asset) =>
-      asset.agreements.map((agreement) => ({
-        ...agreement,
-        assetId: asset.id,
-        templateTerms: asset.termTemplates.map((template) => ({
-          templateId: template.id,
-          heading: template.name,
-          items: template.items.map(({ id, position, text, importantObligation }) => ({
-            id,
-            position,
-            text,
-            importantObligation,
-          })),
-        })),
-      })),
+      asset.agreements
+        .filter((agreement) => !agreement.mergedIntoAgreementId)
+        .map((agreement) => {
+          const mergedAssetIds = [...new Set(agreement.mergedMembers.map((member) => member.assetId))];
+          const includedAssets = [
+            asset,
+            ...assets.filter((entry) => mergedAssetIds.includes(entry.id)),
+          ];
+          return {
+            ...agreement,
+            assetId: asset.id,
+            mergedAssetIds,
+            agreementDurationUnit: asset.agreementDurationUnit,
+            agreementDurationValue: asset.agreementDurationValue,
+            templateTerms: includedAssets.flatMap((entry) =>
+              entry.termTemplates.map((template) => ({
+                templateId: template.id,
+                heading: template.name,
+                items: template.items.map(({ id, position, text, importantObligation }) => ({
+                  id,
+                  position,
+                  text,
+                  importantObligation,
+                })),
+              })),
+            ),
+          };
+        }),
     );
     const tenants = owner.tenants.map(({ publicShareTokenHash, ...tenant }) => ({
       ...tenant,
@@ -239,7 +270,7 @@ export async function GET() {
       })),
       assets: assets.map((asset) => {
         const latestApprovedAgreement = [...asset.agreements]
-          .filter((agreement) => agreement.status !== "DRAFT" && agreement.ownerApprovedAt !== null)
+          .filter((agreement) => !agreement.mergedIntoAgreementId && agreement.status === "ACTIVE" && agreement.ownerApprovedAt !== null)
           .sort((left, right) => {
             const yearDifference = right.agreementYear - left.agreementYear;
             if (yearDifference !== 0) return yearDifference;
@@ -406,7 +437,7 @@ export async function POST(request: Request) {
       const endsAt = new Date(`${endDate}T00:00:00.000Z`);
       const agreementYear = Number(startDate.slice(0, 4));
       const agreementForYear = await prisma.rentalAgreement.findFirst({
-        where: { assetId, tenantId, agreementYear },
+        where: { assetId, tenantId, agreementYear, status: { not: "CANCELLED" }, mergedIntoAgreementId: null },
         select: { id: true },
       });
       if (agreementForYear) {
@@ -706,6 +737,23 @@ export async function POST(request: Request) {
         (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
         return NextResponse.json({ error: "Check the optional tenant KYC details and photo." }, { status: 400 });
       }
+      const tenantData = {
+        fullName,
+        mobileNumber: mobileNumber || null,
+        businessName,
+        businessNature,
+        fullAddress,
+        addressLine1,
+        addressLine2,
+        district,
+        state,
+        city,
+        postalCode,
+        aadhaarNumber,
+        fatherName,
+        email,
+        photoDataUrl: photo,
+      };
       if (!assetId || !startDate) {
         const existingTenant = mobileNumber
           ? await prisma.tenant.findUnique({ where: { mobileNumber } })
@@ -714,12 +762,26 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: "This mobile number is already registered with a different owner." }, { status: 409 });
         }
         const tenant = existingTenant
-          ? await prisma.tenant.update({
-              where: { id: existingTenant.id },
-              data: { fullName, mobileNumber, businessName, businessNature, fullAddress, addressLine1, addressLine2, district, state, city, postalCode, aadhaarNumber, fatherName, email, photoDataUrl: photo },
+          ? await prisma.$transaction(async (transaction) => {
+              const current = await transaction.tenant.findUnique({
+                where: { id: existingTenant.id },
+                select: {
+                  fullName: true, mobileNumber: true, businessName: true, businessNature: true,
+                  fullAddress: true, addressLine1: true, addressLine2: true, district: true,
+                  state: true, city: true, postalCode: true, aadhaarNumber: true,
+                  fatherName: true, email: true, photoDataUrl: true,
+                },
+              });
+              const changed = current ? hasChangedValues(current, tenantData) : false;
+              const updated = await transaction.tenant.update({
+                where: { id: existingTenant.id },
+                data: tenantData,
+              });
+              if (changed) await requireAgreementReapprovalForTenant(transaction, existingTenant.id);
+              return updated;
             })
           : await prisma.tenant.create({
-              data: { ownerId: owner.id, fullName, mobileNumber, businessName, businessNature, fullAddress, addressLine1, addressLine2, district, state, city, postalCode, aadhaarNumber, fatherName, email, photoDataUrl: photo },
+              data: { ownerId: owner.id, ...tenantData },
             });
         return NextResponse.json({ tenant }, { status: 201 });
       }
@@ -751,15 +813,29 @@ export async function POST(request: Request) {
           throw new PortfolioConflictError("This mobile number is already registered with a different owner.");
         }
         const tenant = existingTenant
-          ? await transaction.tenant.update({
-              where: { id: existingTenant.id },
-              data: { fullName, businessName, businessNature, fullAddress, addressLine1, addressLine2, district, state, city, postalCode, aadhaarNumber, fatherName, email, photoDataUrl: photo },
-            })
+          ? await (async () => {
+              const current = await transaction.tenant.findUnique({
+                where: { id: existingTenant.id },
+                select: {
+                  fullName: true, mobileNumber: true, businessName: true, businessNature: true,
+                  fullAddress: true, addressLine1: true, addressLine2: true, district: true,
+                  state: true, city: true, postalCode: true, aadhaarNumber: true,
+                  fatherName: true, email: true, photoDataUrl: true,
+                },
+              });
+              const changed = current ? hasChangedValues(current, tenantData) : false;
+              const updated = await transaction.tenant.update({
+                where: { id: existingTenant.id },
+                data: tenantData,
+              });
+              if (changed) await requireAgreementReapprovalForTenant(transaction, existingTenant.id);
+              return updated;
+            })()
           : await transaction.tenant.create({
-              data: { ownerId: owner.id, fullName, mobileNumber, businessName, businessNature, fullAddress, addressLine1, addressLine2, district, state, city, postalCode, aadhaarNumber, fatherName, email, photoDataUrl: photo },
+              data: { ownerId: owner.id, ...tenantData },
             });
         const existingAgreement = await transaction.rentalAgreement.findFirst({
-          where: { assetId, tenantId: tenant.id, agreementYear },
+          where: { assetId, tenantId: tenant.id, agreementYear, status: { not: "CANCELLED" }, mergedIntoAgreementId: null },
           select: { id: true },
         });
         if (existingAgreement) {
@@ -1047,21 +1123,47 @@ export async function PATCH(request: Request) {
           select: { id: true },
         });
         if (!company) return NextResponse.json({ error: "Company not found in your account." }, { status: 404 });
-        const building = await prisma.building.updateMany({
-          where: { id, ownerId: owner.id },
-          data: {
-            companyId: input.companyId,
-            name: input.name!,
-            address: input.address!,
-            city: input.city!,
-            state: input.state!,
-            postalCode: input.postalCode!,
-            panchayat: input.panchayat,
-            ownerName: owner.fullName,
-            ownerMobile: session.mobileNumber,
-          },
+        const building = await prisma.$transaction(async (transaction) => {
+          const current = await transaction.building.findFirst({
+            where: { id, ownerId: owner.id },
+            select: {
+              name: true, address: true, city: true, state: true, postalCode: true,
+              panchayat: true, companyId: true,
+              assets: { select: { id: true } },
+            },
+          });
+          if (!current) return false;
+          const changed =
+            current.name !== input.name ||
+            current.address !== input.address ||
+            current.city !== input.city ||
+            current.state !== input.state ||
+            current.postalCode !== input.postalCode ||
+            current.panchayat !== input.panchayat ||
+            current.companyId !== input.companyId;
+          await transaction.building.update({
+            where: { id },
+            data: {
+              companyId: input.companyId,
+              name: input.name!,
+              address: input.address!,
+              city: input.city!,
+              state: input.state!,
+              postalCode: input.postalCode!,
+              panchayat: input.panchayat,
+              ownerName: owner.fullName,
+              ownerMobile: session.mobileNumber,
+            },
+          });
+          if (changed) {
+            await requireAgreementReapprovalForAssets(
+              transaction,
+              current.assets.map((asset) => asset.id),
+            );
+          }
+          return true;
         });
-        if (!building.count) return NextResponse.json({ error: "Property not found in your account." }, { status: 404 });
+        if (!building) return NextResponse.json({ error: "Property not found in your account." }, { status: 404 });
       } else {
         const duplicate = input.mobileNumber
           ? await prisma.tenant.findFirst({
@@ -1070,9 +1172,18 @@ export async function PATCH(request: Request) {
             })
           : null;
         if (duplicate) return NextResponse.json({ error: "This mobile number is already registered." }, { status: 409 });
-        const tenant = await prisma.tenant.updateMany({
-          where: { id, ownerId: owner.id },
-          data: {
+        const tenant = await prisma.$transaction(async (transaction) => {
+          const current = await transaction.tenant.findFirst({
+            where: { id, ownerId: owner.id },
+            select: {
+              fullName: true, mobileNumber: true, businessName: true, businessNature: true,
+              fullAddress: true, addressLine1: true, addressLine2: true, district: true,
+              state: true, city: true, postalCode: true, aadhaarNumber: true,
+              fatherName: true, email: true, photoDataUrl: true,
+            },
+          });
+          if (!current) return false;
+          const data = {
             fullName: input.fullName!,
             mobileNumber: input.mobileNumber,
             businessName: input.businessName,
@@ -1088,9 +1199,15 @@ export async function PATCH(request: Request) {
             fatherName: input.fatherName,
             email: input.email,
             photoDataUrl: input.photoDataUrl,
-          },
+          };
+          const changed = Object.entries(data).some(
+            ([key, value]) => current[key as keyof typeof current] !== value,
+          );
+          await transaction.tenant.update({ where: { id }, data });
+          if (changed) await requireAgreementReapprovalForTenant(transaction, id);
+          return true;
         });
-        if (!tenant.count) return NextResponse.json({ error: "Tenant not found in your account." }, { status: 404 });
+        if (!tenant) return NextResponse.json({ error: "Tenant not found in your account." }, { status: 404 });
       }
       return NextResponse.json({ success: true });
     } catch (error) {
@@ -1171,7 +1288,12 @@ export async function PATCH(request: Request) {
     const [asset, building, duplicateUnit] = await Promise.all([
       prisma.asset.findFirst({
         where: { id: assetId, building: { ownerId: owner.id } },
-        select: { id: true },
+        select: {
+          id: true, buildingId: true, name: true, assetType: true, unitNumber: true,
+          monthlyRent: true, securityDeposit: true, agreementDurationUnit: true,
+          agreementDurationValue: true, agreementStartDate: true, externalBuildingId: true,
+          ward: true, roomNumber: true, ksmartBuildingId: true, ksrbId: true,
+        },
       }),
       prisma.building.findFirst({
         where: { id: buildingId, ownerId: owner.id },
@@ -1188,14 +1310,44 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: "This unit number already exists in that building." }, { status: 409 });
     }
 
-    const updatedAsset = await prisma.asset.update({
-      where: { id: assetId },
-      data: {
-        ...input,
-        agreementStartDate: input.agreementStartDate
-          ? new Date(`${input.agreementStartDate}T00:00:00.000Z`)
-          : null,
-      },
+    const updatedAsset = await prisma.$transaction(async (transaction) => {
+      const current = await transaction.asset.findUnique({
+        where: { id: assetId },
+        select: {
+          buildingId: true, name: true, assetType: true, unitNumber: true,
+          monthlyRent: true, securityDeposit: true, agreementDurationUnit: true,
+          agreementDurationValue: true, agreementStartDate: true, externalBuildingId: true,
+          ward: true, roomNumber: true, ksmartBuildingId: true, ksrbId: true,
+        },
+      });
+      if (!current) throw new PortfolioNotFoundError("Asset not found in your account.");
+      const agreementStartDate = input.agreementStartDate
+        ? new Date(`${input.agreementStartDate}T00:00:00.000Z`)
+        : null;
+      const changed =
+        current.buildingId !== input.buildingId ||
+        current.name !== input.name ||
+        current.assetType !== input.assetType ||
+        current.unitNumber !== input.unitNumber ||
+        current.monthlyRent !== input.monthlyRent ||
+        current.securityDeposit !== input.securityDeposit ||
+        current.agreementDurationUnit !== input.agreementDurationUnit ||
+        current.agreementDurationValue !== input.agreementDurationValue ||
+        (current.agreementStartDate?.toISOString().slice(0, 10) ?? null) !== input.agreementStartDate ||
+        current.externalBuildingId !== input.externalBuildingId ||
+        current.ward !== input.ward ||
+        current.roomNumber !== input.roomNumber ||
+        current.ksmartBuildingId !== input.ksmartBuildingId ||
+        current.ksrbId !== input.ksrbId;
+      const updated = await transaction.asset.update({
+        where: { id: assetId },
+        data: { ...input, agreementStartDate },
+      });
+      if (changed) {
+        await syncAgreementAmountsFromAssets(transaction, [assetId]);
+        await requireAgreementReapprovalForAssets(transaction, [assetId]);
+      }
+      return updated;
     });
     return NextResponse.json({ asset: updatedAsset });
   } catch (error) {
@@ -1321,6 +1473,7 @@ export async function DELETE(request: Request) {
             where: { id: { in: ids }, asset: { building: { ownerId: owner.id } } },
             include: {
               tenant: { select: { fullName: true, mobileNumber: true } },
+              mergedMembers: { select: { id: true } },
               asset: {
                 include: {
                   building: { select: { name: true, address: true, city: true, state: true } },
@@ -1337,6 +1490,9 @@ export async function DELETE(request: Request) {
             },
           });
           if (records.length !== ids.length) throw new PortfolioNotFoundError("One or more agreements were not found in your account.");
+          if (records.some((record) => record.mergedMembers.length > 0 || record.mergedIntoAgreementId)) {
+            throw new PortfolioConflictError("Split merged agreements before archiving them.");
+          }
           for (const record of records) {
             await transaction.archivedRentalAgreement.create({
               data: buildArchivedAgreementData(owner.id, record),
@@ -1471,6 +1627,7 @@ export async function DELETE(request: Request) {
         where: { id, asset: { building: { ownerId: owner.id } } },
         include: {
           tenant: { select: { fullName: true, mobileNumber: true } },
+          mergedMembers: { select: { id: true } },
           asset: {
             include: {
               building: { select: { name: true, address: true, city: true, state: true } },
@@ -1487,6 +1644,9 @@ export async function DELETE(request: Request) {
         },
       });
       if (!agreement) return NextResponse.json({ error: "Agreement not found in your account." }, { status: 404 });
+      if (agreement.mergedMembers.length > 0 || agreement.mergedIntoAgreementId) {
+        return NextResponse.json({ error: "Split this merged agreement before archiving it." }, { status: 409 });
+      }
       await prisma.$transaction(async (transaction) => {
         await transaction.archivedRentalAgreement.create({
           data: buildArchivedAgreementData(owner.id, agreement),
