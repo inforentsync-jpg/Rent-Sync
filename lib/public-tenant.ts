@@ -5,6 +5,8 @@ import { formatPartyAddress } from "@/lib/party-address";
 export async function getPublicTenantData(token: string) {
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
   const tokenHash = createHash("sha256").update(token).digest("hex");
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
   const tenant = await prisma.tenant.findUnique({
     where: { publicShareTokenHash: tokenHash },
     select: {
@@ -43,7 +45,13 @@ export async function getPublicTenantData(token: string) {
         },
       },
       agreements: {
-        where: { mergedIntoAgreementId: null },
+        where: {
+          mergedIntoAgreementId: null,
+          status: "ACTIVE",
+          ownerApprovedAt: { not: null },
+          mandatoryDetailsApprovedAt: { not: null },
+          endDate: { gte: today },
+        },
         orderBy: { startDate: "desc" },
         select: {
           id: true,

@@ -11,8 +11,18 @@ export async function getPublicTenantAgreementDownloadData(token: string, id: st
   });
   if (!tenant) return null;
 
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
   const agreement = await prisma.rentalAgreement.findFirst({
-    where: { id, tenantId: tenant.id, mergedIntoAgreementId: null },
+    where: {
+      id,
+      tenantId: tenant.id,
+      mergedIntoAgreementId: null,
+      status: "ACTIVE",
+      ownerApprovedAt: { not: null },
+      mandatoryDetailsApprovedAt: { not: null },
+      endDate: { gte: today },
+    },
     include: {
       tenant: true,
       asset: {
