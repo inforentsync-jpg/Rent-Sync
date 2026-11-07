@@ -94,6 +94,7 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
   const visibleAgreements = selectedAgreementYear
     ? data.agreements.filter((agreement) => agreement.startDate.slice(0, 4) === selectedAgreementYear)
     : data.agreements;
+  const shortcutAgreement = [...currentAgreements].sort((left, right) => right.startDate.localeCompare(left.startDate))[0];
   const expiryAgreement = [...currentAgreements].sort((left, right) => left.endDate.localeCompare(right.endDate))[0]
     ?? data.agreements.find((agreement) => getStatus(agreement) === "Draft")
     ?? data.agreements[0];
@@ -143,6 +144,35 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
             <p className="mt-2 max-w-[540px] text-[12px] leading-6 text-white/70 sm:text-[14px]">
               A clear, up-to-date overview of the assigned property and current rental agreement.
             </p>
+            {shortcutAgreement ? (
+              <div className="mt-5 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReviewingAgreement(shortcutAgreement)}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-white px-3.5 text-[11px] font-semibold text-[#176b4b] shadow-sm transition hover:bg-[#eff6f0]"
+                >
+                  <FileCheck2 size={15} /> Review agreement
+                </button>
+                <a
+                  href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(shortcutAgreement.id)}/pdf`}
+                  download
+                  aria-label={`Download PDF for agreement ${shortcutAgreement.agreementNumber}`}
+                  title="Download agreement PDF"
+                  className="grid size-10 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"
+                >
+                  <FileDown size={17} />
+                </a>
+                <a
+                  href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(shortcutAgreement.id)}/word`}
+                  download
+                  aria-label={`Download Word copy for agreement ${shortcutAgreement.agreementNumber}`}
+                  title="Download agreement Word copy"
+                  className="grid size-10 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"
+                >
+                  <FileText size={17} />
+                </a>
+              </div>
+            ) : null}
           </div>
           <div className="relative mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <HeroStat label="Properties" value={data.assets.length.toLocaleString("en-IN")} />
