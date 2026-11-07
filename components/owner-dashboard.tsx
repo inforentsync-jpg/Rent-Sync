@@ -419,9 +419,6 @@ export default function OwnerDashboard() {
         throw new Error(payload.error || "Unable to create a public tenant page.");
       }
       const publicOrigin = new URL(window.location.origin);
-      if (["localhost", "127.0.0.1"].includes(publicOrigin.hostname)) {
-        publicOrigin.port = "8081";
-      }
       setTenantShareLink({
         tenantId,
         url: `${publicOrigin.origin}/share/tenant/${encodeURIComponent(payload.token)}`,
