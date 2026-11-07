@@ -167,7 +167,10 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
                 type="button"
                 role="tab"
                 aria-selected={tab === id}
-                onClick={() => setTab(id)}
+                onClick={() => {
+                  setTab(id);
+                  if (id === "agreements") setSelectedAgreementYear(null);
+                }}
                 className={`flex min-h-11 items-center gap-2 rounded-xl px-3.5 text-[11px] font-semibold transition sm:flex-1 sm:justify-center ${tab === id ? "bg-[#176b4b] text-white shadow-sm" : "text-[#718078] hover:bg-[#eff5f0] hover:text-[#284b35]"}`}
               >
                 <Icon size={15} /> {label}
@@ -246,69 +249,79 @@ export default function PublicTenantPage({ data, token }: { data: PublicTenantDa
 
           {tab === "agreements" ? (
             <div className="space-y-3">
-              {agreementYears.length ? (
-                <div role="tablist" aria-label="Filter agreements by year" className="flex flex-wrap gap-2 rounded-2xl border border-[#e5ece6] bg-white p-3">
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={selectedAgreementYear === null}
-                    onClick={() => setSelectedAgreementYear(null)}
-                    className={`min-h-10 rounded-xl px-4 text-[11px] font-semibold transition ${selectedAgreementYear === null ? "bg-[#176b4b] text-white" : "border border-[#dfe8e1] bg-white text-[#355942]"}`}
-                  >
-                    All years
-                  </button>
+              {selectedAgreementYear === null ? (
+                agreementYears.length ? (
+                  <div role="list" aria-label="Agreement years" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {agreementYears.map((year) => {
                     const count = data.agreements.filter((agreement) => agreement.startDate.slice(0, 4) === year).length;
                     return (
                       <button
                         key={year}
                         type="button"
-                        role="tab"
-                        aria-selected={selectedAgreementYear === year}
                         onClick={() => setSelectedAgreementYear(year)}
-                        className={`min-h-10 rounded-xl px-4 text-[11px] font-semibold transition ${selectedAgreementYear === year ? "bg-[#176b4b] text-white" : "border border-[#dfe8e1] bg-white text-[#355942]"}`}
+                        className="group flex min-h-36 items-center justify-between rounded-2xl border border-[#e5ece6] bg-white px-6 py-5 text-left shadow-[0_8px_28px_-24px_rgba(26,54,36,0.3)] transition hover:border-[#9fc8ad] hover:bg-[#f8fbf8] sm:min-h-44 sm:px-7"
                       >
-                        {year} <span className={selectedAgreementYear === year ? "ml-1 opacity-80" : "ml-1 text-[#849188]"}>({count})</span>
+                        <span>
+                          <span className="block text-[36px] font-bold leading-none tracking-[-0.06em] text-[#203328] sm:text-[44px]">{year}</span>
+                          <span className="mt-3 block text-[11px] font-medium text-[#718078]">{count} {count === 1 ? "agreement" : "agreements"}</span>
+                        </span>
+                        <span className="grid size-10 place-items-center rounded-xl bg-[#eef6ef] text-[#286244] transition group-hover:bg-[#176b4b] group-hover:text-white">
+                          <ChevronRight size={20} />
+                        </span>
                       </button>
                     );
                   })}
-                </div>
-              ) : null}
-              {visibleAgreements.length ? visibleAgreements.map((agreement) => {
-                const status = getStatus(agreement);
-                return (
-                <article key={agreement.id} className="rounded-2xl border border-[#e5ece6] bg-white p-5 shadow-[0_8px_28px_-24px_rgba(26,54,36,0.3)] sm:flex sm:items-center sm:justify-between sm:gap-4">
-                  <div>
-                    <h2 className="text-[36px] font-bold leading-none tracking-[-0.06em] text-[#203328]">{agreement.startDate.slice(0, 4)}</h2>
-                    <p className="mt-2 text-[10px] font-medium text-[#829087]">Asset ID · {agreement.assetId}</p>
-                    <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-[10px] font-semibold ${status === "Approved" ? "bg-[#eaf3ec] text-[#315b41]" : status === "Cancelled" || status === "Expired" ? "bg-[#f1f3f1] text-[#718078]" : "bg-[#fff4df] text-[#855a17]"}`}>
-                      {status}
-                    </span>
                   </div>
-                  <div className="mt-4 grid w-full gap-2 sm:mt-0 sm:w-auto sm:grid-cols-3">
-                    <button type="button" onClick={() => setReviewingAgreement(agreement)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#176b4b] px-4 text-[11px] font-semibold text-white transition hover:bg-[#10583c]">
-                      Review agreement <ChevronRight size={15} />
+                ) : <EmptyCard text="No agreements are available on this shared page." />
+              ) : (
+                <>
+                  <div className="flex items-center justify-between gap-3 rounded-2xl border border-[#e5ece6] bg-white px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedAgreementYear(null)}
+                      className="min-h-10 rounded-xl border border-[#dfe8e1] px-4 text-[11px] font-semibold text-[#355942] transition hover:bg-[#f5faf6]"
+                    >
+                      Back to years
                     </button>
-                    <a
-                      href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(agreement.id)}/pdf`}
-                      download
-                      aria-label={`Download PDF for ${agreement.agreementNumber}`}
-                      className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#cfe0d3] bg-[#f5faf6] px-4 text-[11px] font-semibold text-[#176b4b] shadow-sm transition hover:border-[#176b4b] hover:bg-[#eaf4ed]"
-                    >
-                      <FileDown size={15} /> Download PDF
-                    </a>
-                    <a
-                      href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(agreement.id)}/word`}
-                      download
-                      aria-label={`Download Word document for ${agreement.agreementNumber}`}
-                      className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#cfe0d3] bg-[#f5faf6] px-4 text-[11px] font-semibold text-[#176b4b] shadow-sm transition hover:border-[#176b4b] hover:bg-[#eaf4ed]"
-                    >
-                      <FileText size={15} /> Download Word
-                    </a>
+                    <h2 className="text-[24px] font-bold tracking-[-0.05em] text-[#203328]">{selectedAgreementYear}</h2>
                   </div>
-                </article>
-                );
-              }) : <EmptyCard text={selectedAgreementYear ? `No agreements are available for ${selectedAgreementYear}.` : "No agreements are available on this shared page."} />}
+                  {visibleAgreements.length ? visibleAgreements.map((agreement) => {
+                    const status = getStatus(agreement);
+                    return (
+                      <article key={agreement.id} className="rounded-2xl border border-[#e5ece6] bg-white p-5 shadow-[0_8px_28px_-24px_rgba(26,54,36,0.3)] sm:flex sm:items-center sm:justify-between sm:gap-4">
+                        <div>
+                          <h2 className="text-[36px] font-bold leading-none tracking-[-0.06em] text-[#203328]">{agreement.startDate.slice(0, 4)}</h2>
+                          <p className="mt-2 text-[10px] font-medium text-[#829087]">Asset ID · {agreement.assetId}</p>
+                          <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-[10px] font-semibold ${status === "Approved" ? "bg-[#eaf3ec] text-[#315b41]" : status === "Cancelled" || status === "Expired" ? "bg-[#f1f3f1] text-[#718078]" : "bg-[#fff4df] text-[#855a17]"}`}>
+                            {status}
+                          </span>
+                        </div>
+                        <div className="mt-4 grid w-full gap-2 sm:mt-0 sm:w-auto sm:grid-cols-3">
+                          <button type="button" onClick={() => setReviewingAgreement(agreement)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#176b4b] px-4 text-[11px] font-semibold text-white transition hover:bg-[#10583c]">
+                            Review agreement <ChevronRight size={15} />
+                          </button>
+                          <a
+                            href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(agreement.id)}/pdf`}
+                            download
+                            aria-label={`Download PDF for ${agreement.agreementNumber}`}
+                            className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#cfe0d3] bg-[#f5faf6] px-4 text-[11px] font-semibold text-[#176b4b] shadow-sm transition hover:border-[#176b4b] hover:bg-[#eaf4ed]"
+                          >
+                            <FileDown size={15} /> Download PDF
+                          </a>
+                          <a
+                            href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(agreement.id)}/word`}
+                            download
+                            aria-label={`Download Word document for ${agreement.agreementNumber}`}
+                            className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#cfe0d3] bg-[#f5faf6] px-4 text-[11px] font-semibold text-[#176b4b] shadow-sm transition hover:border-[#176b4b] hover:bg-[#eaf4ed]"
+                          >
+                            <FileText size={15} /> Download Word
+                          </a>
+                        </div>
+                      </article>
+                    );
+                  }) : <EmptyCard text={`No agreements are available for ${selectedAgreementYear}.`} />}
+                </>
+              )}
             </div>
           ) : null}
 
