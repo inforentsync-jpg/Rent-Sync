@@ -63,6 +63,28 @@ type AgreementTermGroup = {
   heading: string;
   items: TermItem[];
 };
+
+function dedupeAgreementTermGroups(groups: AgreementTermGroup[] | undefined) {
+  if (!groups?.length) return [] as AgreementTermGroup[];
+  const deduped = new Map<string, AgreementTermGroup>();
+  for (const group of groups) {
+    const heading = group.heading.trim();
+    const existing = deduped.get(heading) ?? { ...group, items: [] };
+    const seen = new Set(existing.items.map((item) => item.text.trim()));
+    const nextItems = [...existing.items];
+    for (const item of group.items) {
+      const normalizedText = item.text.trim();
+      if (!normalizedText || seen.has(normalizedText)) continue;
+      nextItems.push({ ...item, text: normalizedText });
+      seen.add(normalizedText);
+    }
+    deduped.set(heading, { ...existing, items: nextItems });
+  }
+  return [...deduped.values()].map((group) => ({
+    ...group,
+    items: group.items.map((item, index) => ({ ...item, position: index + 1 })),
+  }));
+}
 type Asset = {
   id: string;
   buildingId: string;
@@ -305,6 +327,8 @@ export default function OwnerDashboard() {
   const [tenantShareError, setTenantShareError] = useState<{ tenantId: string; message: string } | null>(null);
   const [tenantShareBusy, setTenantShareBusy] = useState(false);
   const [tenantShareCopiedFor, setTenantShareCopiedFor] = useState<string | null>(null);
+  const [tenantResetBusy, setTenantResetBusy] = useState(false);
+  const [tenantResetError, setTenantResetError] = useState<{ tenantId: string; message: string } | null>(null);
   const [selectedTenantBuildingId, setSelectedTenantBuildingId] = useState("");
   const [selectedAssetBuildingId, setSelectedAssetBuildingId] = useState("");
   const [agreementBuildingSelection, setAgreementBuildingSelection] = useState({
@@ -453,6 +477,32 @@ export default function OwnerDashboard() {
       });
     } finally {
       setTenantShareBusy(false);
+    }
+  }
+
+  async function resetTenantDetails(tenant: Tenant) {
+    if (tenantResetBusy) return;
+    const confirmed = window.confirm(
+      `Clear all details for ${tenant.fullName} except the tenant name?\n\nAssigned assets and agreement details will stay unchanged. Current agreements will return to approval after the tenant details are completed again.`,
+    );
+    if (!confirmed) return;
+
+    setTenantResetBusy(true);
+    setTenantResetError(null);
+    try {
+      const response = await fetch(`/api/owner/tenants/${encodeURIComponent(tenant.id)}/reset-details`, {
+        method: "POST",
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to reset tenant details.");
+      await loadPortfolio();
+    } catch (cause) {
+      setTenantResetError({
+        tenantId: tenant.id,
+        message: cause instanceof Error ? cause.message : "Unable to reset tenant details.",
+      });
+    } finally {
+      setTenantResetBusy(false);
     }
   }
 
@@ -1370,7 +1420,7 @@ export default function OwnerDashboard() {
             }} className="grid size-9 place-items-center rounded-lg border border-[#e4eae5] text-[#53675a]"><Menu size={17} /></button>
             <h1 className="text-[16px] font-semibold tracking-[-0.03em] text-[#1b2c22]">Your property portfolio</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <a href="/owner/profile" className="flex h-9 items-center gap-2 rounded-lg border border-[#e4eae5] bg-white px-3 text-[11px] font-medium text-[#315b41] transition hover:bg-[#f1f6f2]"><UserRound size={15} /><span>Profile</span></a>
           </div>
         </header>
@@ -1516,9 +1566,9 @@ export default function OwnerDashboard() {
               </div>
               <div className="border-t border-[#edf0ed] p-5 sm:p-6">
                 <h3 className="text-[13px] font-semibold text-[#203328]">Mapped agreement terms</h3>
-                {selectedArchivedAgreement.templateTerms.flatMap((group) => group.items).length ? (
+                {dedupeAgreementTermGroups(selectedArchivedAgreement.templateTerms).flatMap((group) => group.items).length ? (
                   <ol className="mt-3 space-y-2">
-                    {selectedArchivedAgreement.templateTerms.flatMap((group) => group.items).map((item, index) => (
+                    {dedupeAgreementTermGroups(selectedArchivedAgreement.templateTerms).flatMap((group) => group.items).map((item, index) => (
                       <li key={item.id} className="flex items-start gap-3 rounded-xl border border-[#e7ece7] bg-[#fbfcfb] p-3">
                         <span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#e9f3eb] text-[10px] font-bold text-[#176b4b]">{index + 1}</span>
                         <span className="text-[11px] leading-5 text-[#53675a]">
@@ -1607,7 +1657,7 @@ export default function OwnerDashboard() {
                 {agreementTab === "terms" ? (
                   <div className="sm:col-span-2 space-y-5">
                     <TabPanelHeading title="Agreement terms" description="Property terms mapped to this unit, followed by any additional conditions recorded for this rental." />
-                    {selectedAgreement.templateTerms?.map((template) => (
+                    {dedupeAgreementTermGroups(selectedAgreement.templateTerms).map((template) => (
                       <div key={template.templateId} className="rounded-xl border border-[#e7ece7] bg-[#fbfcfb] p-4">
                         <h3 className="text-[12px] font-semibold text-[#294034]">{template.heading}</h3>
                         {template.items.length ? (
@@ -1646,7 +1696,8 @@ export default function OwnerDashboard() {
                 {agreementTab === "important-terms" ? (
                   <div className="sm:col-span-2">
                     {(() => {
-                      const mappedImportantTerms = selectedAgreement.templateTerms?.flatMap((template) => template.items)
+                      const mappedImportantTerms = dedupeAgreementTermGroups(selectedAgreement.templateTerms)
+                        .flatMap((template) => template.items)
                         .filter((item) => item.importantObligation)
                         .map((item) => item.text.trim())
                         .filter(Boolean) ?? [];
@@ -1677,10 +1728,23 @@ export default function OwnerDashboard() {
                 </div>
                 <div className="flex items-center gap-2">
                   <button type="button" onClick={startRecordEdit} className="rounded-lg border border-[#dfe8e1] bg-[#f7faf7] px-3 py-2 text-[10px] font-semibold text-[#355942]">Edit</button>
+                  <button
+                    type="button"
+                    onClick={() => void resetTenantDetails(selectedTenant)}
+                    disabled={tenantResetBusy}
+                    className="rounded-lg border border-[#f0d9d2] bg-[#fff8f7] px-3 py-2 text-[10px] font-semibold text-[#9a4a3d] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {tenantResetBusy ? "Resetting..." : "Reset tenant details"}
+                  </button>
                   <button type="button" onClick={() => void handleDeleteRecord(selectedTenant.id)} disabled={deletingRecordId !== null} className="rounded-lg border border-[#f0d9d2] bg-[#fff8f7] px-3 py-2 text-[10px] font-semibold text-[#9a4a3d] disabled:cursor-not-allowed disabled:opacity-60">Delete</button>
                   <button type="button" onClick={() => syncModuleUrl("tenants")} className="rounded-lg border border-[#dfe8e1] bg-[#f5f8f5] px-3 py-2 text-[10px] font-semibold text-[#355942]">Back to tenants</button>
                 </div>
               </div>
+              {tenantResetError?.tenantId === selectedTenant.id ? (
+                <p role="alert" className="border-b border-[#edf0ed] bg-[#fff8f7] px-5 py-2 text-[10px] text-[#9a4a3d] sm:px-6">
+                  {tenantResetError.message}
+                </p>
+              ) : null}
 
               <div role="tablist" aria-label="Tenant sections" className="flex gap-1 border-b border-[#edf0ed] px-4 sm:px-6">
                 {tenantTabs.map((tab) => (

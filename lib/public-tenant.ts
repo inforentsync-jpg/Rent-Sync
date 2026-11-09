@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/database";
 import { formatPartyAddress } from "@/lib/party-address";
+import { getMissingPublicTenantProfileFields } from "@/lib/public-tenant-profile-fields";
 
 export async function getPublicTenantData(token: string) {
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
@@ -13,6 +14,7 @@ export async function getPublicTenantData(token: string) {
       fullName: true,
       mobileNumber: true,
       businessName: true,
+      businessNature: true,
       fullAddress: true,
       addressLine1: true,
       addressLine2: true,
@@ -102,11 +104,16 @@ export async function getPublicTenantData(token: string) {
   });
 
   if (!tenant) return null;
+  const missingProfileFields = getMissingPublicTenantProfileFields(tenant);
+  const profileComplete = missingProfileFields.length === 0;
   return {
+    profileComplete,
+    missingProfileFields,
     tenant: {
       fullName: tenant.fullName,
       mobileNumber: tenant.mobileNumber,
       businessName: tenant.businessName,
+      businessNature: tenant.businessNature,
       fullAddress: tenant.fullAddress,
       addressLine1: tenant.addressLine1,
       addressLine2: tenant.addressLine2,
@@ -120,7 +127,7 @@ export async function getPublicTenantData(token: string) {
       email: tenant.email,
       photoDataUrl: tenant.photoDataUrl,
     },
-    assets: tenant.assets.map(({ asset }) => ({
+    assets: profileComplete ? tenant.assets.map(({ asset }) => ({
       id: asset.id,
       name: asset.name,
       assetType: asset.assetType,
@@ -134,8 +141,8 @@ export async function getPublicTenantData(token: string) {
       buildingName: asset.building.name,
       city: asset.building.city,
       state: asset.building.state,
-    })),
-    agreements: tenant.agreements.map(({ asset, mergedMembers, ...agreement }) => ({
+    })) : [],
+    agreements: profileComplete ? tenant.agreements.map(({ asset, mergedMembers, ...agreement }) => ({
       ...agreement,
       mergedAssetIds: [...new Set(mergedMembers.map(({ asset: mergedAsset }) => mergedAsset.id))],
       startDate: agreement.startDate.toISOString().slice(0, 10),
@@ -161,6 +168,6 @@ export async function getPublicTenantData(token: string) {
           importantObligation,
         })),
       })),
-    })),
+    })) : [],
   };
 }

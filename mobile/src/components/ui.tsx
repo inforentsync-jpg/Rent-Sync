@@ -8,6 +8,7 @@ import {
   TextInput,
   View,
   type TextInputProps,
+  type TextStyle,
   type ViewStyle,
 } from "react-native";
 import { colors, radii } from "@/theme";
@@ -61,15 +62,22 @@ export function Heading({
 export function Field({
   label,
   style,
+  labelStyle,
+  inputStyle,
   ...props
-}: TextInputProps & { label: string; style?: ViewStyle }) {
+}: TextInputProps & {
+  label: string;
+  style?: ViewStyle;
+  labelStyle?: TextStyle;
+  inputStyle?: TextStyle;
+}) {
   return (
     <View style={[styles.fieldWrap, style]}>
-      <Text style={styles.fieldLabel}>{label}</Text>
+      <Text style={[styles.fieldLabel, labelStyle]}>{label}</Text>
       <TextInput
         placeholderTextColor={colors.muted}
         selectionColor={colors.leaf}
-        style={styles.input}
+        style={[styles.input, inputStyle]}
         {...props}
       />
     </View>

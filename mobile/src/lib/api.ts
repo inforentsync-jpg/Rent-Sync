@@ -11,9 +11,7 @@ type RequestOptions = {
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}) {
   const baseUrl = await readApiBaseUrl();
-  if (!baseUrl) {
-    throw new Error("Set the Rent-Sync server address before signing in.");
-  }
+
   let response: Response;
   try {
     response = await fetch(`${baseUrl}${path}`, {
@@ -27,8 +25,9 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}) 
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
     });
   } catch {
-    throw new Error("Could not reach Rent-Sync. Check the server address and connection.");
+    throw new Error("Could not reach Rent-Sync. Check your internet connection and try again.");
   }
+
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const message =
@@ -37,6 +36,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}) 
         : "The request could not be completed.";
     throw new Error(message);
   }
+
   return payload as T;
 }
 
@@ -58,9 +58,11 @@ export async function signIn(
         ? { mobileNumber, password }
         : { mobileNumber, password, method: "password" },
   });
+
   if (!response.token) {
     throw new Error("Sign-in succeeded but no mobile session was returned.");
   }
+
   return { token: response.token, role, mobileNumber: mobileNumber.replace(/\D/g, "") };
 }
 
@@ -76,6 +78,7 @@ export async function registerOwner(
   if (!response.token) {
     throw new Error("Registration succeeded but no mobile session was returned.");
   }
+
   return {
     token: response.token,
     role: "OWNER" as const,
@@ -107,11 +110,27 @@ export function createTenantShareLink<T>(session: MobileSession, tenantId: strin
   );
 }
 
+export function createTenantPublicProfileLink<T>(session: MobileSession, tenantId: string) {
+  return createTenantShareLink<T>(session, tenantId);
+}
+
 export function revokeTenantShareLink<T>(session: MobileSession, tenantId: string) {
   return authenticatedRequest<T>(
     session,
     `/api/owner/tenants/${encodeURIComponent(tenantId)}/share`,
     { method: "DELETE" },
+  );
+}
+
+export function getTenantPublicProfileLinks<T>(session: MobileSession) {
+  return getTenantShareLinks<T>(session);
+}
+
+export function resetTenantProfileDetails<T>(session: MobileSession, tenantId: string) {
+  return authenticatedRequest<T>(
+    session,
+    `/api/owner/tenants/${encodeURIComponent(tenantId)}/reset-details`,
+    { method: "POST" },
   );
 }
 
@@ -187,18 +206,78 @@ export function resetAccountPassword<T>(
   });
 }
 
+export function saveOwnerTerms<T>(session: MobileSession, body: Record<string, unknown>) {
+  return authenticatedRequest<T>(session, "/api/owner/terms", {
+    method: "POST",
+    body,
+  });
+}
+
+export function mergeOwnerAgreements<T>(session: MobileSession, body: Record<string, unknown> | unknown[]) {
+  return authenticatedRequest<T>(session, "/api/owner/agreements/merge", {
+    method: "POST",
+    body,
+  });
+}
+
+export function splitOwnerAgreement<T>(session: MobileSession, agreementId: string) {
+  return authenticatedRequest<T>(session, `/api/owner/agreements/${encodeURIComponent(agreementId)}/split`, {
+    method: "POST",
+  });
+}
+
+export async function downloadOwnerAgreementDocument(
+  session: MobileSession,
+  agreementId: string,
+  format: "pdf" | "word",
+): Promise<{ blob: Blob; filename: string }> {
+  const baseUrl = await readApiBaseUrl();
+
+  const response = await fetch(
+    `${baseUrl}/api/owner/agreements/${encodeURIComponent(agreementId)}/${format === "word" ? "word" : "pdf"}`,
+    {
+      method: "GET",
+      headers: {
+        Accept: format === "word"
+          ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          : "application/pdf",
+        "x-rent-sync-client": "mobile",
+        Authorization: `Bearer ${session.token}`,
+      },
+    },
+  );
+
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    const message =
+      payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
+        ? payload.error
+        : "Unable to download the agreement document.";
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const rawFilename =
+    /filename\*=([^;]+)/i.exec(disposition)?.[1] ??
+    /filename=(?:"|)?([^;"\n]+)(?:"|)?/i.exec(disposition)?.[1];
+  const filename = rawFilename
+    ? decodeURIComponent(rawFilename.replace(/^UTF-8''/i, "").replace(/"/g, ""))
+    : `${agreementId}.${format === "word" ? "docx" : "pdf"}`;
+
+  return { blob, filename };
+}
+
 export async function shareAgreementPdf(
   session: MobileSession,
   agreementId: string,
   agreementNumber: string,
 ) {
   const baseUrl = await readApiBaseUrl();
-  if (!baseUrl) {
-    throw new Error("Set the Rent-Sync server address before sharing this agreement.");
-  }
   if (!(await Sharing.isAvailableAsync())) {
     throw new Error("Agreement sharing is not available on this device.");
   }
+
   const filename = `${agreementNumber.replace(/[^A-Za-z0-9_-]/g, "") || "rental-agreement"}.pdf`;
   const destination = new File(Paths.cache, filename);
   const file = await File.downloadFileAsync(
@@ -212,6 +291,7 @@ export async function shareAgreementPdf(
       },
     },
   );
+
   await Sharing.shareAsync(file.uri, {
     mimeType: "application/pdf",
     dialogTitle: "Share rental agreement",

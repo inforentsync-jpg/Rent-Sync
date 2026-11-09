@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -14,7 +14,6 @@ import {
   Eye,
   EyeOff,
   LockKeyhole,
-  Settings2,
   ShieldCheck,
   UserRound,
   UsersRound,
@@ -22,7 +21,7 @@ import {
 import { Field, ActionButton, Notice, Panel } from "@/components/ui";
 import { colors } from "@/theme";
 import { registerOwner, signIn } from "@/lib/api";
-import { readApiBaseUrl, saveApiBaseUrl, writeSession, type AccountRole, type MobileSession } from "@/lib/session";
+import { writeSession, type AccountRole, type MobileSession } from "@/lib/session";
 
 const roles: Array<{ id: AccountRole; label: string; Icon: typeof Building2 }> = [
   { id: "OWNER", label: "Owner", Icon: Building2 },
@@ -45,28 +44,9 @@ export default function LoginScreen({
   const [fullName, setFullName] = useState("");
   const [mobileNumber, setMobileNumber] = useState("");
   const [password, setPassword] = useState("");
-  const [serverUrl, setServerUrl] = useState("");
-  const [showServerSettings, setShowServerSettings] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    void readApiBaseUrl().then(setServerUrl).catch((cause: unknown) => {
-      setError(cause instanceof Error ? cause.message : "Unable to read app settings.");
-    });
-  }, []);
-
-  async function saveServer() {
-    try {
-      const saved = await saveApiBaseUrl(serverUrl);
-      setServerUrl(saved);
-      setError("");
-      setShowServerSettings(false);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to save the server address.");
-    }
-  }
 
   async function submit() {
     setError("");
@@ -221,31 +201,6 @@ export default function LoginScreen({
             </View>
           ) : null}
 
-          <Pressable
-            onPress={() => {
-              setError("");
-              setShowServerSettings((value) => !value);
-            }}
-            style={styles.settingsToggle}
-          >
-            <Settings2 size={14} color={colors.muted} />
-            <Text style={styles.settingsText}>Server settings</Text>
-          </Pressable>
-
-          {showServerSettings ? (
-            <View style={styles.serverSettings}>
-              <Field
-                label="Rent-Sync server"
-                value={serverUrl}
-                onChangeText={setServerUrl}
-                placeholder="https://your-rent-sync-domain.com"
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-              />
-              <ActionButton label="Save server" onPress={() => void saveServer()} variant="secondary" compact />
-            </View>
-          ) : null}
         </Panel>
 
         <Text style={styles.footer}>Secure access to your property workspace</Text>
@@ -315,8 +270,5 @@ const styles = StyleSheet.create({
   switchAction: { color: colors.forest, fontSize: 11, fontWeight: "700" },
   helpRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   helpText: { flex: 1, color: colors.muted, fontSize: 11, lineHeight: 17 },
-  settingsToggle: { alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 4 },
-  settingsText: { color: colors.muted, fontSize: 11, fontWeight: "600" },
-  serverSettings: { gap: 12, borderTopWidth: 1, borderColor: colors.line, paddingTop: 15 },
   footer: { textAlign: "center", color: colors.muted, fontSize: 10, paddingVertical: 4 },
 });

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { generateAgreementWord } from "@/lib/agreement-word";
 import { agreementContentDisposition, agreementDownloadFilename } from "@/lib/agreement-download-filename";
 import { getPublicTenantAgreementDownloadData } from "@/lib/public-tenant-agreement-download";
+import { getPublicTenantData } from "@/lib/public-tenant";
 import { shouldUseDatabase } from "@/lib/storage-mode";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +21,19 @@ export async function GET(
 
   try {
     const { token, id } = await params;
+    const sharedProfile = await getPublicTenantData(token);
+    if (!sharedProfile) {
+      return NextResponse.json(
+        { error: "This shared tenant page is unavailable." },
+        { status: 404, headers: { "Cache-Control": "no-store" } },
+      );
+    }
+    if (!sharedProfile.profileComplete) {
+      return NextResponse.json(
+        { error: "Complete the tenant profile before viewing shared agreements." },
+        { status: 403, headers: { "Cache-Control": "no-store" } },
+      );
+    }
     const result = await getPublicTenantAgreementDownloadData(token, id);
     if (!result) {
       return NextResponse.json(

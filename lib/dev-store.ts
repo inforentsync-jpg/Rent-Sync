@@ -876,6 +876,36 @@ export function updateDevPortfolioItem(
   });
 }
 
+export function resetDevTenantDetails(ownerMobile: string, id: string) {
+  return withStore(async (store) => {
+    const owner = store.owners.find((entry) => entry.mobileNumber === ownerMobile);
+    if (!owner) throw new Error("Owner account was not found.");
+    const tenant = store.tenants.find((entry) => entry.id === id && entry.ownerId === owner.id);
+    if (!tenant) return false;
+
+    Object.assign(tenant, {
+      mobileNumber: null,
+      businessName: null,
+      businessNature: null,
+      fullAddress: null,
+      addressLine1: null,
+      addressLine2: null,
+      district: null,
+      state: null,
+      city: null,
+      postalCode: null,
+      aadhaarNumber: null,
+      fatherName: null,
+      email: null,
+      photoDataUrl: null,
+      updatedAt: new Date().toISOString(),
+    });
+    markDevAgreementsForReview(store, (agreement) => agreement.tenantId === tenant.id);
+    await writeStore(store);
+    return true;
+  });
+}
+
 export function deleteDevPortfolioItem(
   ownerMobile: string,
   kind: "company" | "building" | "asset" | "tenant" | "agreement",
@@ -1717,14 +1747,10 @@ export function mergeDevAgreements(ownerMobile: string, agreementIds: string[]) 
           tenant.id === primary.tenantId && tenant.assetIds.includes(asset?.id ?? ""),
         ),
       ) ||
-      assetRecords.some((asset) =>
-        asset?.agreementDurationUnit !== assetRecords[0]?.agreementDurationUnit ||
-        asset?.agreementDurationValue !== assetRecords[0]?.agreementDurationValue,
-      ) ||
       new Set(records.map((agreement) => agreement.assetId)).size !== records.length
     ) {
       throw new DevAgreementMergeError(
-        "Select one unmerged agreement per asset. Agreements must belong to the same tenant and building and use matching duration settings.",
+        "Select one unmerged agreement per asset. Agreements must belong to the same tenant and building before creating a combined agreement.",
       );
     }
 

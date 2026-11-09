@@ -2,7 +2,7 @@
   "expo": {
     "name": "Rent-Sync",
     "slug": "rent-sync",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/rent-sync-icon.png",
     "scheme": "rentsync",
@@ -12,6 +12,7 @@
     },
     "android": {
       "package": "com.inforentsync.rentsync",
+      "versionCode": 2,
       "adaptiveIcon": {
         "backgroundColor": "#102E25",
         "foregroundImage": "./assets/images/rent-sync-foreground.png",
@@ -25,6 +26,7 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/with-cmake-object-path-limit",
       [
         "expo-splash-screen",
         {

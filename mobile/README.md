@@ -7,10 +7,12 @@ The Expo app uses the existing Rent-Sync API for owner, tenant, and platform-adm
 ```powershell
 cd mobile
 npm install
-npx expo start
+npm run api:proxy
 ```
 
-For the Android emulator, the development default is `http://10.0.2.2:3000`. iOS simulators and web use `http://localhost:3000`. On a physical phone, open **Server settings** on the sign-in screen and enter the reachable HTTPS address of the Rent-Sync deployment or the computer's LAN address.
+In another terminal, start the Next.js app from the repository root (`npm run dev`) and Expo for web with `npx expo start --web`. The local browser preview uses the loopback API proxy at `http://localhost:3001` to connect to the configured Vercel API without cross-origin restrictions. Opening a tenant share link from Expo redirects to the Next.js share page at `http://localhost:3000`; both servers must be running. Native builds continue to call the Vercel API directly.
+
+The app is configured in code to use `https://rentsync-theta.vercel.app`. The sign-in screen does not expose a server-address setting.
 
 ## Build an installable Android APK
 
@@ -20,8 +22,6 @@ Install EAS CLI and sign in to the Expo account that owns this app:
 npm install --global eas-cli
 eas login
 ```
-
-Set `EXPO_PUBLIC_API_URL` to the deployed Rent-Sync HTTPS origin in the EAS build environment before creating a release. The app also allows the server address to be configured on the sign-in screen.
 
 ```powershell
 eas build --platform android --profile production

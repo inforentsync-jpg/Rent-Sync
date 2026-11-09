@@ -2,33 +2,30 @@
 
 import { useState } from "react";
 import {
-  ArrowUpRight,
-  BookOpenText,
   Building2,
-  CalendarDays,
   Check,
-  ChevronRight,
   FileDown,
-  FileCheck2,
-  FileText,
-  Home,
   ShieldCheck,
 } from "lucide-react";
-import AgreementApprovalWizard, { type ReviewableAgreement } from "@/components/agreement-approval-wizard";
+import { type ReviewableAgreement } from "@/components/agreement-approval-wizard";
+import {
+  publicTenantProfileFields,
+  type PublicTenantProfileField,
+} from "@/lib/public-tenant-profile-fields";
 
-type PublicAgreement = Omit<
-  ReviewableAgreement,
-  "tenantId"
-> & {
+type PublicAgreement = ReviewableAgreement & {
   propertyName: string;
   buildingName: string;
   buildingAddress: string;
 };
 type PublicTenantData = {
+  profileComplete: boolean;
+  missingProfileFields: PublicTenantProfileField[];
   tenant: {
     fullName: string;
     mobileNumber: string | null;
     businessName: string | null;
+    businessNature: string | null;
     fullAddress: string | null;
     formattedAddress: string | null;
     addressLine1: string | null;
@@ -59,15 +56,6 @@ type PublicTenantData = {
   }[];
   agreements: PublicAgreement[];
 };
-type PublicTab = "overview" | "assets" | "agreements" | "terms";
-
-const publicTabs: Array<{ id: PublicTab; label: string; icon: typeof Home }> = [
-  { id: "overview", label: "Overview", icon: Home },
-  { id: "assets", label: "Properties", icon: Building2 },
-  { id: "agreements", label: "Agreements", icon: FileCheck2 },
-  { id: "terms", label: "Terms", icon: BookOpenText },
-];
-
 function formatDate(value: string) {
   return new Date(`${value.slice(0, 10)}T00:00:00`).toLocaleDateString("en-IN", {
     day: "numeric",
@@ -77,366 +65,367 @@ function formatDate(value: string) {
 }
 
 export default function PublicTenantPage({ data, token }: { data: PublicTenantData; token: string }) {
-  const [tab, setTab] = useState<PublicTab>("overview");
-  const [selectedAgreementYear, setSelectedAgreementYear] = useState<string | null>(null);
-  const [reviewingAgreement, setReviewingAgreement] = useState<PublicTenantData["agreements"][number] | null>(null);
   const today = new Date().toISOString().slice(0, 10);
-  const getStatus = (agreement: PublicAgreement) => {
-    if (agreement.status === "CANCELLED") return "Cancelled";
-    if (agreement.status === "DRAFT") return "Draft";
-    if (agreement.status === "ACTIVE" && !agreement.mandatoryDetailsApprovedAt) return "Awaiting owner approval";
-    if (agreement.endDate < today) return "Expired";
-    return agreement.ownerApprovedAt ? "Approved" : "Awaiting approval";
-  };
-  const currentAgreements = data.agreements.filter((agreement) => getStatus(agreement) === "Approved");
-  const agreementYears = [...new Set(data.agreements.map((agreement) => agreement.startDate.slice(0, 4)))]
-    .sort((left, right) => right.localeCompare(left));
-  const visibleAgreements = selectedAgreementYear
-    ? data.agreements.filter((agreement) => agreement.startDate.slice(0, 4) === selectedAgreementYear)
+  const agreementYears = [...new Set(data.agreements.map((agreement) => agreement.startDate.slice(0, 4)))].sort((a, b) => b.localeCompare(a));
+  const [selectedAgreementYear, setSelectedAgreementYear] = useState<string | null>(null);
+  const activeAgreementYear = selectedAgreementYear ?? agreementYears[0] ?? null;
+  const currentAgreements = data.agreements.filter((agreement) => {
+    if (agreement.status === "CANCELLED" || agreement.status === "DRAFT") return false;
+    return agreement.endDate >= today;
+  });
+
+  if (!data.profileComplete) {
+    return <PublicTenantProfileCompletion token={token} data={data} />;
+  }
+
+  const latestAgreement = [...currentAgreements].sort((a, b) => b.startDate.localeCompare(a.startDate))[0] ?? data.agreements[0];
+  const primaryAsset = data.assets[0];
+  const totalMonthlyRent = currentAgreements.reduce((sum, agreement) => sum + Number(agreement.monthlyRent || 0), 0);
+  const totalSecurityDeposit = currentAgreements.reduce((sum, agreement) => sum + Number(agreement.securityDeposit || 0), 0);
+  const filteredAgreements = activeAgreementYear
+    ? data.agreements.filter((agreement) => agreement.startDate.slice(0, 4) === activeAgreementYear)
     : data.agreements;
-  const shortcutAgreement = [...currentAgreements].sort((left, right) => right.startDate.localeCompare(left.startDate))[0];
-  const expiryAgreement = [...currentAgreements].sort((left, right) => left.endDate.localeCompare(right.endDate))[0]
-    ?? data.agreements.find((agreement) => getStatus(agreement) === "Draft")
-    ?? data.agreements[0];
-  const expiryLabel = expiryAgreement
-    ? getStatus(expiryAgreement) === "Draft"
-      ? "Agreement end date"
-      : getStatus(expiryAgreement) === "Expired" ? "Last expired" : "Agreement expires"
-    : null;
-  const allTerms = data.agreements.flatMap((agreement) =>
-    agreement.templateTerms?.flatMap((template) =>
-      template.items.map((item) => ({ ...item, agreementNumber: agreement.agreementNumber })),
-    ) ?? [],
+  const selectedAgreement = [...filteredAgreements].sort((a, b) => b.startDate.localeCompare(a.startDate))[0] ?? latestAgreement;
+  const tenantFields = [
+    { label: "Tenant name", value: data.tenant.fullName || "—" },
+    { label: "Business", value: data.tenant.businessName || "—" },
+    { label: "Business nature", value: data.tenant.businessNature || "—" },
+    { label: "Mobile", value: data.tenant.mobileNumber ? `+${data.tenant.mobileNumber}` : "—" },
+    { label: "Email", value: data.tenant.email || "—" },
+    { label: "Aadhaar", value: data.tenant.aadhaarNumber || "—" },
+    { label: "Father's name", value: data.tenant.fatherName || "—" },
+    { label: "Address", value: data.tenant.formattedAddress || data.tenant.fullAddress || "—" },
+    { label: "City", value: data.tenant.city || "—" },
+    { label: "State", value: data.tenant.state || "—" },
+    { label: "Postal code", value: data.tenant.postalCode || "—" },
+  ];
+  return (
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_#fffaf4_0%,_#effbf2_31%,_#edf6ff_100%)] text-[#173327]">
+      <div className="mx-auto max-w-md px-4 py-5 sm:max-w-lg">
+        <header className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <span className="grid size-11 place-items-center rounded-2xl bg-gradient-to-br from-[#1e7d5d] via-[#125840] to-[#0d2e26] text-white shadow-[0_18px_30px_-16px_rgba(17,96,73,0.8)]">
+              <Building2 size={18} />
+            </span>
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-[0.22em] text-[#70857b]">Rent Sync</p>
+              <p className="text-[22px] font-black tracking-[-0.08em] text-[#15382d]">
+                rent<span className="text-[#1b7a59]">sync</span>
+              </p>
+            </div>
+          </div>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#eaf9ee] px-2.5 py-1.5 text-[9px] font-black text-[#245f46] shadow-inner shadow-white/70">
+            <ShieldCheck size={12} /> Shared
+          </span>
+        </header>
+
+        <section className="mt-5 overflow-hidden rounded-[30px] bg-gradient-to-br from-[#0e4d3c] via-[#155c45] to-[#0b3127] p-4 text-white shadow-[0_30px_65px_-30px_rgba(11,49,39,0.85)]">
+          <div className="flex items-center justify-between">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/8 px-2 py-1 text-[9px] font-semibold text-white/80">
+              <span className="size-1.5 rounded-full bg-[#8fe0a1] shadow-[0_0_12px_rgba(143,224,161,0.9)]" />
+              Active
+            </span>
+            <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-[#d7f6dd]">Tenant</span>
+          </div>
+
+          <h1 className="mt-5 text-[38px] font-black leading-[0.92] tracking-[-0.09em] text-white">
+            {data.tenant.fullName}
+          </h1>
+          <p className="mt-2 text-[12px] leading-5 text-white/75">
+            {primaryAsset ? `${primaryAsset.buildingName} • ${primaryAsset.city}` : data.tenant.formattedAddress || "Tenant agreement and property details"}
+          </p>
+
+          <div className="mt-5 grid grid-cols-2 gap-2.5">
+            <InfoTile label="Rent" value={`₹${totalMonthlyRent.toLocaleString("en-IN")}`} dark />
+            <InfoTile label="Deposit" value={`₹${totalSecurityDeposit.toLocaleString("en-IN")}`} dark />
+          </div>
+
+          {selectedAgreement ? (
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <a
+                href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(selectedAgreement.id)}/pdf`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center justify-center gap-1.5 rounded-2xl bg-white px-3 py-2.5 text-[11px] font-black text-[#184b39] shadow-[0_10px_24px_-12px_rgba(0,0,0,0.5)] transition hover:-translate-y-0.5 hover:bg-[#f4faf5]"
+              >
+                <FileDown size={14} /> PDF
+              </a>
+              <a
+                href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(selectedAgreement.id)}/word`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center justify-center gap-1.5 rounded-2xl border border-white/20 bg-white/8 px-3 py-2.5 text-[11px] font-black text-white shadow-[0_10px_24px_-16px_rgba(0,0,0,0.6)] transition hover:-translate-y-0.5 hover:bg-white/12"
+              >
+                <FileDown size={14} /> Word
+              </a>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="mt-4 rounded-[28px] border border-[#e1ebdf] bg-white/90 p-4 shadow-[0_18px_30px_-26px_rgba(19,36,31,0.35)] backdrop-blur-sm">
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-[9px] font-black uppercase tracking-[0.16em] text-[#7f9184]">Profile</p>
+            <span className="rounded-full bg-[#edf8ef] px-2 py-1 text-[8px] font-bold uppercase tracking-[0.12em] text-[#2d6d4d]">Info</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2.5">
+            {tenantFields.map((field) => (
+              <InfoTile key={field.label} label={field.label} value={field.value} />
+            ))}
+          </div>
+        </section>
+
+        <section className="mt-4 rounded-[28px] border border-[#e2ebdf] bg-white/90 p-4 shadow-[0_18px_30px_-26px_rgba(19,36,31,0.35)] backdrop-blur-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-[0.16em] text-[#7f9184]">Property</p>
+              <h2 className="mt-1 text-[22px] font-black tracking-[-0.06em] text-[#173327]">All assets</h2>
+            </div>
+            <span className="grid size-10 place-items-center rounded-2xl bg-gradient-to-br from-[#ebfff0] to-[#dff1ff] text-[#286244] shadow-inner shadow-white/90">
+              <Building2 size={18} />
+            </span>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {data.assets.length ? data.assets.map((asset) => (
+              <div key={asset.id} className="rounded-[24px] bg-gradient-to-br from-[#f9fbfa] to-[#f2f7f4] p-3 shadow-[inset_0_0_0_1px_rgba(203,220,208,0.7)]">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[15px] font-black tracking-[-0.04em] text-[#1d352a]">{asset.name}</p>
+                    <p className="mt-1 text-[10px] text-[#72857d]">{asset.buildingName}</p>
+                  </div>
+                  <span className="rounded-full bg-[#edf9f0] px-2 py-1 text-[8px] font-black uppercase tracking-[0.09em] text-[#2a694d]">{asset.assetType}</span>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <InfoTile label="Unit" value={asset.unitNumber || "—"} />
+                  <InfoTile label="Rent" value={`₹${Number(asset.monthlyRent || 0).toLocaleString("en-IN")}`} />
+                  <InfoTile label="Location" value={[asset.city, asset.state].filter(Boolean).join(", ") || "—"} />
+                  <InfoTile label="Deposit" value={`₹${Number(asset.securityDeposit || 0).toLocaleString("en-IN")}`} />
+                  <InfoTile label="Ward" value={asset.ward || "—"} />
+                  <InfoTile label="Room" value={asset.roomNumber || "—"} />
+                  <InfoTile label="KSRB ID" value={asset.ksrbId || "—"} />
+                  <InfoTile label="KSMART ID" value={asset.ksmartBuildingId || "—"} />
+                </div>
+              </div>
+            )) : (
+              <div className="mt-4 rounded-[22px] border border-dashed border-[#dfeae1] bg-[#f8faf8] p-5 text-center">
+                <span className="mx-auto grid size-10 place-items-center rounded-2xl bg-[#edf8ef] text-[#2b6d49]">
+                  <Check size={18} />
+                </span>
+                <p className="mt-3 text-[11px] leading-5 text-[#73857d]">No assigned property is available right now.</p>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="mt-4 rounded-[28px] border border-[#e2ebdf] bg-white/90 p-4 shadow-[0_18px_30px_-26px_rgba(19,36,31,0.35)] backdrop-blur-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-[0.16em] text-[#7f9184]">Agreement</p>
+              <h2 className="mt-1 text-[22px] font-black tracking-[-0.06em] text-[#173327]">All agreements</h2>
+            </div>
+            <span className="grid size-10 place-items-center rounded-2xl bg-gradient-to-br from-[#ebfff0] to-[#eaf5ff] text-[#286244] shadow-inner shadow-white/90">
+              <Check size={18} />
+            </span>
+          </div>
+
+          {agreementYears.length > 1 ? (
+            <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+              {agreementYears.map((year) => (
+                <button
+                  key={year}
+                  type="button"
+                  onClick={() => setSelectedAgreementYear(activeAgreementYear === year ? null : year)}
+                  className={`shrink-0 rounded-full border px-2.5 py-1.5 text-[9px] font-black transition ${
+                    activeAgreementYear === year
+                      ? "border-[#0f583f] bg-gradient-to-r from-[#0f583f] to-[#1c7a58] text-white shadow-[0_10px_20px_-12px_rgba(15,88,63,0.9)]"
+                      : "border-[#dfeae2] bg-[#f5faf6] text-[#49675a]"
+                  }`}
+                >
+                  {year}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="mt-4 space-y-4">
+            {filteredAgreements.length ? filteredAgreements.map((agreement) => (
+              <div key={agreement.id} className="rounded-[24px] bg-gradient-to-br from-[#f9fbfa] to-[#f1faf4] p-3 shadow-[inset_0_0_0_1px_rgba(203,220,208,0.7)]">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[15px] font-black tracking-[-0.04em] text-[#1d352a]">{agreement.propertyName}</p>
+                    <p className="mt-1 text-[10px] text-[#73857d]">{agreement.agreementNumber}</p>
+                  </div>
+                  <span className="rounded-full bg-[#edf9f0] px-2 py-1 text-[8px] font-black uppercase tracking-[0.09em] text-[#2a694d]">{agreement.status}</span>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <InfoTile label="Start" value={formatDate(agreement.startDate)} />
+                  <InfoTile label="End" value={formatDate(agreement.endDate)} />
+                  <InfoTile label="Monthly" value={`₹${Number(agreement.monthlyRent || 0).toLocaleString("en-IN")}`} />
+                  <InfoTile label="Deposit" value={`₹${Number(agreement.securityDeposit || 0).toLocaleString("en-IN")}`} />
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <a
+                    href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(agreement.id)}/pdf`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-[#dfeae2] bg-white px-2 py-2 text-[9px] font-black text-[#184b39] shadow-sm transition hover:-translate-y-0.5"
+                  >
+                    <FileDown size={12} /> PDF
+                  </a>
+                  <a
+                    href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(agreement.id)}/word`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-[#dfeae2] bg-white px-2 py-2 text-[9px] font-black text-[#184b39] shadow-sm transition hover:-translate-y-0.5"
+                  >
+                    <FileDown size={12} /> Word
+                  </a>
+                </div>
+              </div>
+            )) : (
+              <div className="mt-4 rounded-[22px] border border-dashed border-[#dfeae1] bg-[#f8faf8] p-5 text-center">
+                <span className="mx-auto grid size-10 place-items-center rounded-2xl bg-[#edf8ef] text-[#2b6d49]">
+                  <Check size={18} />
+                </span>
+                <p className="mt-3 text-[11px] leading-5 text-[#73857d]">No agreement details are available on this share link.</p>
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </main>
   );
+}
+function PublicTenantProfileCompletion({  token,
+  data,
+}: {
+  token: string;
+  data: PublicTenantData;
+}) {
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(data.missingProfileFields.map((field) => [field, data.tenant[field] ?? ""])),
+  );
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  function resetTenantDetails() {
+    setValues((current) => {
+      const next = { ...current };
+      const preservedName = data.tenant.fullName || current.fullName || "";
+      for (const field of Object.keys(publicTenantProfileFields) as PublicTenantProfileField[]) {
+        next[field] = field === "fullName" ? preservedName : "";
+      }
+      return next;
+    });
+  }
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/public/tenants/${encodeURIComponent(token)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.fromEntries(
+          data.missingProfileFields.map((field) => [field, values[field] ?? ""]),
+        )),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
+          ? payload.error
+          : "Unable to submit your tenant profile.";
+        throw new Error(message);
+      }
+      window.location.reload();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to submit your tenant profile.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <main className="min-h-screen bg-[#f4f7f4] text-[#17271e]">
       <header className="border-b border-[#e6ede7] bg-white">
-        <div className="mx-auto flex h-[68px] max-w-[1120px] items-center justify-between px-4 sm:px-7">
+        <div className="mx-auto flex min-h-[68px] max-w-[1120px] items-center justify-between gap-3 px-4 sm:px-7">
           <div className="flex items-center gap-2.5">
             <span className="grid size-9 place-items-center rounded-xl bg-[#176b4b] text-white"><Building2 size={17} /></span>
             <span className="text-[17px] font-bold tracking-[-0.06em]">rent<span className="text-[#176b4b]">sync</span></span>
           </div>
-          <div className="flex items-center gap-1.5 rounded-full bg-[#eff6f0] px-3 py-1.5 text-[10px] font-semibold text-[#286244]">
-            <ShieldCheck size={14} /> Shared tenant page
-          </div>
+          <button
+            type="button"
+            onClick={() => setShowForm((visible) => !visible)}
+            className="min-h-10 rounded-xl bg-[#176b4b] px-3 text-[10px] font-semibold text-white transition hover:bg-[#10583c] sm:px-4 sm:text-[11px]"
+          >
+            Your profile is incomplete Â· {showForm ? "Hide form" : "Complete now"}
+          </button>
         </div>
       </header>
-
-      <div className="mx-auto max-w-[1120px] px-4 pb-14 pt-5 sm:px-7 sm:pt-8">
-        <section className="relative overflow-hidden rounded-[28px] bg-[#123d2c] px-5 py-7 text-white shadow-[0_18px_50px_-28px_rgba(18,61,44,0.65)] sm:px-9 sm:py-10">
-          <div className="pointer-events-none absolute -right-10 -top-28 size-72 rounded-full border-[38px] border-white/[0.045]" />
-          <div className="pointer-events-none absolute -bottom-24 right-32 size-52 rounded-full bg-[#3e8764]/20 blur-2xl" />
-          {expiryAgreement && expiryLabel ? (
-            <div className="absolute right-5 top-5 inline-flex items-center gap-2.5 rounded-2xl border border-[#f4c66d]/70 bg-[#fff1c9] px-3 py-2.5 shadow-lg shadow-black/10 sm:right-8 sm:top-7">
-              <span className="grid size-8 place-items-center rounded-xl bg-[#f9dfa0] text-[#86500e]"><CalendarDays size={15} /></span>
-              <span className="block">
-                <span className="block text-[8px] font-bold uppercase tracking-[0.12em] text-[#946018]">{expiryLabel}</span>
-                <span className="mt-0.5 block text-[12px] font-semibold text-[#49300d]">{formatDate(expiryAgreement.endDate)}</span>
-              </span>
-            </div>
-          ) : null}
-          <div className="relative max-w-[700px]">
-            <p className="text-[10px] font-bold uppercase tracking-[0.19em] text-[#a6d2b3]">Tenant information</p>
-            <h1 className="mt-3 text-[30px] font-semibold leading-tight tracking-[-0.06em] sm:text-[42px]">
-              {data.tenant.fullName}
-            </h1>
-            <p className="mt-2 max-w-[540px] text-[12px] leading-6 text-white/70 sm:text-[14px]">
-              A clear, up-to-date overview of the assigned property and current rental agreement.
-            </p>
-            {shortcutAgreement ? (
-              <div className="mt-5 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setReviewingAgreement(shortcutAgreement)}
-                  className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-white px-3.5 text-[11px] font-semibold text-[#176b4b] shadow-sm transition hover:bg-[#eff6f0]"
-                >
-                  <FileCheck2 size={15} /> Review agreement
-                </button>
-                <a
-                  href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(shortcutAgreement.id)}/pdf`}
-                  aria-label={`Download PDF for agreement ${shortcutAgreement.agreementNumber}`}
-                  title="Download agreement PDF"
-                  className="grid size-10 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"
-                >
-                  <FileDown size={17} />
-                </a>
-                <a
-                  href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(shortcutAgreement.id)}/word`}
-                  aria-label={`Download Word copy for agreement ${shortcutAgreement.agreementNumber}`}
-                  title="Download agreement Word copy"
-                  className="grid size-10 place-items-center rounded-xl border border-white/20 bg-white/10 text-white transition hover:bg-white/20"
-                >
-                  <FileText size={17} />
-                </a>
-              </div>
-            ) : null}
-          </div>
-          <div className="relative mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <HeroStat label="Properties" value={data.assets.length.toLocaleString("en-IN")} />
-            <HeroStat label="Current agreements" value={currentAgreements.length.toLocaleString("en-IN")} />
-            <HeroStat label="Monthly rent" value={expiryAgreement ? `₹${expiryAgreement.monthlyRent.toLocaleString("en-IN")}` : "—"} />
-            <HeroStat label="Security deposit" value={expiryAgreement ? `₹${expiryAgreement.securityDeposit.toLocaleString("en-IN")}` : "—"} />
-          </div>
-        </section>
-
-        <div className="mt-5 rounded-2xl border border-[#dce9df] bg-white px-4 py-3.5 sm:flex sm:items-center sm:gap-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-[#eef6ef] text-[#286244]"><ShieldCheck size={16} /></span>
-          <p className="mt-2 text-[10px] leading-5 text-[#718078] sm:mt-0 sm:text-[11px]">
-            Anyone with this link can view tenant contact and KYC information, assigned properties, and current agreement, rent, deposit, approval, and terms details.
+      <div className="mx-auto max-w-[760px] px-4 py-8 sm:px-7 sm:py-12">
+        <section className="rounded-[24px] bg-[#123d2c] px-5 py-7 text-white shadow-[0_18px_50px_-28px_rgba(18,61,44,0.65)] sm:px-8 sm:py-9">
+          <p className="text-[10px] font-bold uppercase tracking-[0.17em] text-[#a6d2b3]">Tenant profile</p>
+          <h1 className="mt-3 text-[26px] font-semibold tracking-[-0.05em] sm:text-[34px]">
+            {data.tenant.fullName || "Complete your profile"}
+          </h1>
+          <p className="mt-2 max-w-[540px] text-[12px] leading-6 text-white/75">
+            Complete the missing details to explore your shared properties and agreements.
           </p>
-        </div>
-
-        <nav aria-label="Tenant information sections" className="sticky top-0 z-10 -mx-4 mt-5 overflow-x-auto border-y border-[#e6ede7] bg-[#f4f7f4]/95 px-4 backdrop-blur sm:static sm:mx-0 sm:rounded-2xl sm:border sm:bg-white sm:px-2">
-          <div role="tablist" className="flex min-w-max gap-1 py-1 sm:min-w-0 sm:py-2">
-            {publicTabs.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={tab === id}
-                onClick={() => {
-                  setTab(id);
-                  if (id === "agreements") setSelectedAgreementYear(null);
-                }}
-                className={`flex min-h-11 items-center gap-2 rounded-xl px-3.5 text-[11px] font-semibold transition sm:flex-1 sm:justify-center ${tab === id ? "bg-[#176b4b] text-white shadow-sm" : "text-[#718078] hover:bg-[#eff5f0] hover:text-[#284b35]"}`}
-              >
-                <Icon size={15} /> {label}
-              </button>
-            ))}
-          </div>
-        </nav>
-
-        <section role="tabpanel" className="mt-5">
-          {tab === "overview" ? (
-            <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-              <article className="rounded-2xl border border-[#e5ece6] bg-white p-5 shadow-[0_8px_28px_-24px_rgba(26,54,36,0.3)] sm:p-7">
-                <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-[#769080]">Tenant profile</p>
-                <h2 className="mt-2 text-[20px] font-semibold tracking-[-0.04em] text-[#1c3024]">Current tenancy</h2>
-                <div className="mt-5 rounded-xl bg-[#f7faf7] p-4">
-                  <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-[#819087]">Tenant name</p>
-                  <p className="mt-1.5 text-[14px] font-semibold text-[#294034]">{data.tenant.fullName}</p>
-                </div>
-                <p className="mt-4 text-[11px] leading-5 text-[#718078]">
-                  This public profile is shared by the property owner. The information shown in the tenant and agreement sections is visible to anyone with this link.
-                </p>
-                <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                  <InfoTile label="Business name" value={data.tenant.businessName || "—"} />
-                  <InfoTile label="Mobile number" value={data.tenant.mobileNumber ? `+${data.tenant.mobileNumber}` : "—"} />
-                  <InfoTile label="Address" value={data.tenant.formattedAddress || "—"} />
-                  <InfoTile label="Aadhaar number" value={data.tenant.aadhaarNumber || "—"} />
-                  <InfoTile label="Father's name" value={data.tenant.fatherName || "—"} />
-                  <InfoTile label="Email address" value={data.tenant.email || "—"} />
-                </div>
-              </article>
-              <article className="rounded-2xl border border-[#e5ece6] bg-white p-5 shadow-[0_8px_28px_-24px_rgba(26,54,36,0.3)] sm:p-7">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-[#769080]">Current agreement</p>
-                    <h2 className="mt-2 text-[20px] font-semibold tracking-[-0.04em] text-[#1c3024]">Rental overview</h2>
-                  </div>
-                  <span className="grid size-10 place-items-center rounded-xl bg-[#eef6ef] text-[#286244]"><CalendarDays size={18} /></span>
-                </div>
-                {currentAgreements.length ? currentAgreements.slice(0, 2).map((agreement) => (
-                  <div key={agreement.id} className="mt-4 rounded-xl border border-[#edf1ed] p-4">
-                    <p className="text-[12px] font-semibold text-[#294034]">{agreement.propertyName}</p>
-                    <p className="mt-1 text-[10px] text-[#718078]">{formatDate(agreement.startDate)} – {formatDate(agreement.endDate)}</p>
-                    <button type="button" onClick={() => setReviewingAgreement(agreement)} className="mt-3 inline-flex items-center gap-1.5 text-[10px] font-semibold text-[#176b4b]">
-                      Review agreement <ArrowUpRight size={13} />
-                    </button>
-                  </div>
-                )) : <p className="mt-4 rounded-xl bg-[#f7faf7] p-4 text-[11px] leading-5 text-[#718078]">No current agreement is available on this shared page.</p>}
-              </article>
-            </div>
-          ) : null}
-
-          {tab === "assets" ? (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {data.assets.length ? data.assets.map((asset) => (
-                <article key={asset.id} className="rounded-2xl border border-[#e5ece6] bg-white p-5 shadow-[0_8px_28px_-24px_rgba(26,54,36,0.3)]">
-                  <div className="flex items-start justify-between gap-3">
-                    <span className="grid size-10 place-items-center rounded-xl bg-[#eef6ef] text-[#286244]"><Building2 size={18} /></span>
-                    <span className="rounded-full bg-[#f1f5f1] px-2.5 py-1 text-[9px] font-semibold text-[#63776a]">{asset.assetType}</span>
-                  </div>
-                  <h2 className="mt-4 text-[16px] font-semibold tracking-[-0.03em] text-[#203328]">{asset.name}</h2>
-                  <p className="mt-1 text-[11px] text-[#718078]">{asset.buildingName}</p>
-                  <div className="mt-4 grid grid-cols-2 gap-2">
-                    <InfoTile label="Unit" value={asset.unitNumber} />
-                    <InfoTile label="Location" value={[asset.city, asset.state].filter(Boolean).join(", ") || "—"} />
-                    <InfoTile label="Room number" value={asset.roomNumber || "—"} />
-                    <InfoTile label="Ward number" value={asset.ward || "—"} />
-                    <InfoTile label="K-SMART building ID" value={asset.ksmartBuildingId || "—"} />
-                    <InfoTile label="KSEB ID" value={asset.ksrbId || "—"} />
-                    <InfoTile label="Rent / month" value={`₹${asset.monthlyRent.toLocaleString("en-IN")}`} />
-                    <InfoTile label="Security deposit" value={`₹${asset.securityDeposit.toLocaleString("en-IN")}`} />
-                  </div>
-                </article>
-              )) : <EmptyCard text="No currently assigned properties are available." />}
-            </div>
-          ) : null}
-
-          {tab === "agreements" ? (
-            <div className="space-y-3">
-              {selectedAgreementYear === null ? (
-                agreementYears.length ? (
-                  <div role="list" aria-label="Agreement years" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {agreementYears.map((year) => {
-                    const count = data.agreements.filter((agreement) => agreement.startDate.slice(0, 4) === year).length;
-                    return (
-                      <button
-                        key={year}
-                        type="button"
-                        onClick={() => setSelectedAgreementYear(year)}
-                        className="group flex min-h-36 items-center justify-between rounded-2xl border border-[#e5ece6] bg-white px-6 py-5 text-left shadow-[0_8px_28px_-24px_rgba(26,54,36,0.3)] transition hover:border-[#9fc8ad] hover:bg-[#f8fbf8] sm:min-h-44 sm:px-7"
-                      >
-                        <span>
-                          <span className="block text-[36px] font-bold leading-none tracking-[-0.06em] text-[#203328] sm:text-[44px]">{year}</span>
-                          <span className="mt-3 block text-[11px] font-medium text-[#718078]">{count} {count === 1 ? "agreement" : "agreements"}</span>
-                        </span>
-                        <span className="grid size-10 place-items-center rounded-xl bg-[#eef6ef] text-[#286244] transition group-hover:bg-[#176b4b] group-hover:text-white">
-                          <ChevronRight size={20} />
-                        </span>
-                      </button>
-                    );
-                  })}
-                  </div>
-                ) : <EmptyCard text="No agreements are available on this shared page." />
-              ) : (
-                <>
-                  <div className="flex items-center justify-between gap-3 rounded-2xl border border-[#e5ece6] bg-white px-4 py-3">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedAgreementYear(null)}
-                      className="min-h-10 rounded-xl border border-[#dfe8e1] px-4 text-[11px] font-semibold text-[#355942] transition hover:bg-[#f5faf6]"
-                    >
-                      Back to years
-                    </button>
-                    <h2 className="text-[24px] font-bold tracking-[-0.05em] text-[#203328]">{selectedAgreementYear}</h2>
-                  </div>
-                  {visibleAgreements.length ? visibleAgreements.map((agreement) => {
-                    const status = getStatus(agreement);
-                    return (
-                      <article key={agreement.id} className="rounded-2xl border border-[#e5ece6] bg-white p-5 shadow-[0_8px_28px_-24px_rgba(26,54,36,0.3)] sm:flex sm:items-center sm:justify-between sm:gap-4">
-                        <div>
-                          <h2 className="text-[36px] font-bold leading-none tracking-[-0.06em] text-[#203328]">{agreement.startDate.slice(0, 4)}</h2>
-                          <p className="mt-2 text-[10px] font-medium text-[#829087]">Asset ID · {agreement.assetId}</p>
-                          <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-[10px] font-semibold ${status === "Approved" ? "bg-[#eaf3ec] text-[#315b41]" : status === "Cancelled" || status === "Expired" ? "bg-[#f1f3f1] text-[#718078]" : "bg-[#fff4df] text-[#855a17]"}`}>
-                            {status}
-                          </span>
-                        </div>
-                        <div className="mt-4 grid w-full gap-2 sm:mt-0 sm:w-auto sm:grid-cols-3">
-                          <button type="button" onClick={() => setReviewingAgreement(agreement)} className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#176b4b] px-4 text-[11px] font-semibold text-white transition hover:bg-[#10583c]">
-                            Review agreement <ChevronRight size={15} />
-                          </button>
-                          <a
-                            href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(agreement.id)}/pdf`}
-                            aria-label={`Download PDF for ${agreement.agreementNumber}`}
-                            className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#cfe0d3] bg-[#f5faf6] px-4 text-[11px] font-semibold text-[#176b4b] shadow-sm transition hover:border-[#176b4b] hover:bg-[#eaf4ed]"
-                          >
-                            <FileDown size={15} /> Download PDF
-                          </a>
-                          <a
-                            href={`/api/public/tenants/${encodeURIComponent(token)}/agreements/${encodeURIComponent(agreement.id)}/word`}
-                            aria-label={`Download Word document for ${agreement.agreementNumber}`}
-                            className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#cfe0d3] bg-[#f5faf6] px-4 text-[11px] font-semibold text-[#176b4b] shadow-sm transition hover:border-[#176b4b] hover:bg-[#eaf4ed]"
-                          >
-                            <FileText size={15} /> Download Word
-                          </a>
-                        </div>
-                      </article>
-                    );
-                  }) : <EmptyCard text={`No agreements are available for ${selectedAgreementYear}.`} />}
-                </>
-              )}
-            </div>
-          ) : null}
-
-          {tab === "terms" ? (
-            <div className="space-y-4">
-              {data.agreements.length ? data.agreements.map((agreement) => {
-                const terms = agreement.templateTerms?.flatMap((template) => template.items) ?? [];
-                return (
-                  <article key={agreement.id} className="rounded-2xl border border-[#e5ece6] bg-white p-5 shadow-[0_8px_28px_-24px_rgba(26,54,36,0.3)] sm:p-7">
-                    <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#769080]">{agreement.agreementNumber}</p>
-                    <h2 className="mt-2 text-[16px] font-semibold text-[#203328]">{agreement.propertyName}</h2>
-                    {terms.length ? (
-                      <ol className="mt-4 space-y-3">
-                        {terms.map((item, index) => (
-                          <li key={item.id} className="flex gap-3 rounded-xl bg-[#f7faf7] p-3.5">
-                            <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-white text-[10px] font-bold text-[#176b4b]">{index + 1}</span>
-                            <span className="min-w-0 text-[13px] leading-6 text-[#465a4c]">
-                              {item.importantObligation ? <strong className="mb-0.5 block text-[9px] font-bold uppercase tracking-wide text-[#805b13]">Important obligation</strong> : null}
-                              {item.text}
-                            </span>
-                          </li>
-                        ))}
-                      </ol>
-                    ) : <p className="mt-4 text-[11px] text-[#718078]">No reusable property terms are attached.</p>}
-                    {agreement.terms ? <p className="mt-4 whitespace-pre-wrap rounded-xl border border-[#edf1ed] p-4 text-[11px] leading-5 text-[#53675a]">{agreement.terms}</p> : null}
-                    {agreement.importantTerms ? <p className="mt-3 whitespace-pre-wrap rounded-xl border border-[#f1dfb4] bg-[#fffaf0] p-4 text-[11px] leading-5 text-[#66552e]">{agreement.importantTerms}</p> : null}
-                  </article>
-                );
-              }) : <EmptyCard text="Agreement terms will appear here when an agreement is available." />}
-              {allTerms.length ? (
-                <p className="px-1 text-[9px] leading-4 text-[#8a978e]">
-                  Important obligations are marked for easier review. Open an agreement to read its full details.
-                </p>
-              ) : null}
-            </div>
-          ) : null}
         </section>
-
-        <footer className="mt-8 flex flex-col items-center justify-between gap-2 border-t border-[#e1e9e2] py-5 text-center sm:flex-row sm:text-left">
-          <p className="text-[9px] text-[#829087]">Shared with Rent-Sync · Information is provided by the property owner.</p>
-          <p className="flex items-center gap-1 text-[9px] font-medium text-[#829087]"><ShieldCheck size={12} /> Read-only · No approvals or signatures</p>
-        </footer>
+        <div className="mt-4 rounded-2xl border border-[#dce9df] bg-white px-4 py-3.5 text-[11px] leading-5 text-[#718078]">
+          Property and agreement information stays hidden until the required tenant profile fields are submitted.
+        </div>
+        {showForm ? (
+          <form onSubmit={(event) => void submit(event)} className="mt-4 rounded-2xl border border-[#e5ece6] bg-white p-5 shadow-[0_8px_28px_-24px_rgba(26,54,36,0.3)] sm:p-7">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-[17px] font-semibold tracking-[-0.03em] text-[#203328]">Complete your profile</h2>
+                <p className="mt-1 text-[11px] text-[#718078]">Only the missing required fields are shown.</p>
+              </div>
+              <button
+                type="button"
+                onClick={resetTenantDetails}
+                className="rounded-lg border border-[#dfe8e1] bg-[#f7faf7] px-3 py-2 text-[10px] font-semibold text-[#1f4c3d] transition hover:bg-[#edf7ef]"
+              >
+                Reset tenant details
+              </button>
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              {data.missingProfileFields.map((field) => (
+                <label key={field} className="text-[10px] font-semibold text-[#465a4c]">
+                  {publicTenantProfileFields[field].label}
+                  <input
+                    required
+                    type={field === "mobileNumber" || field === "aadhaarNumber" || field === "postalCode" ? "tel" : "text"}
+                    inputMode={field === "mobileNumber" ? "tel" : field === "aadhaarNumber" || field === "postalCode" ? "numeric" : undefined}
+                    maxLength={publicTenantProfileFields[field].maxLength}
+                    value={values[field] ?? ""}
+                    onChange={(event) => setValues((current) => ({ ...current, [field]: event.target.value }))}
+                    className="mt-1.5 h-11 w-full rounded-lg border border-[#dfe8e1] bg-[#fcfdfc] px-3 text-[12px] outline-none transition focus:border-[#8cbd9b]"
+                  />
+                </label>
+              ))}
+            </div>
+            {error ? <p role="alert" className="mt-4 rounded-lg bg-[#fff4ed] px-3 py-2 text-[11px] text-[#995634]">{error}</p> : null}
+            <button type="submit" disabled={saving} className="mt-5 min-h-11 w-full rounded-xl bg-[#176b4b] px-4 text-[11px] font-semibold text-white transition hover:bg-[#10583c] disabled:opacity-60">
+              {saving ? "Submitting..." : "Submit and explore"}
+            </button>
+          </form>
+        ) : null}
       </div>
-
-      {reviewingAgreement ? (
-        <AgreementApprovalWizard
-          key={reviewingAgreement.id}
-          agreement={{
-            ...reviewingAgreement,
-            assetId: "",
-            tenantId: "",
-            terms: reviewingAgreement.terms ?? "",
-          }}
-          party="PUBLIC"
-          readOnly
-          tenantName={data.tenant.fullName}
-          tenantMobile={data.tenant.mobileNumber ? `+${data.tenant.mobileNumber}` : null}
-          propertyName={reviewingAgreement.propertyName}
-          onClose={() => setReviewingAgreement(null)}
-          onApproved={() => setReviewingAgreement(null)}
-        />
-      ) : null}
     </main>
   );
 }
 
-function InfoTile({ label, value }: { label: string; value: string }) {
+function InfoTile({ label, value, dark = false }: { label: string; value: string; dark?: boolean }) {
   return (
-    <div className="rounded-xl bg-[#f7faf7] px-3 py-2.5">
-      <p className="text-[8px] font-bold uppercase tracking-[0.11em] text-[#829087]">{label}</p>
-      <p className="mt-1 text-[10px] font-semibold text-[#465a4c]">{value}</p>
-    </div>
-  );
-}
-
-function HeroStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0 rounded-2xl border border-white/10 bg-white/[0.07] px-3.5 py-3">
-      <p className="truncate text-[15px] font-semibold tracking-[-0.02em] text-white sm:text-[17px]">{value}</p>
-      <p className="mt-1 truncate text-[9px] font-medium text-white/65 sm:text-[10px]">{label}</p>
-    </div>
-  );
-}
-
-function EmptyCard({ text }: { text: string }) {
-  return (
-    <div className="rounded-2xl border border-dashed border-[#dce6de] bg-white px-5 py-12 text-center">
-      <span className="mx-auto grid size-11 place-items-center rounded-2xl bg-[#eef6ef] text-[#286244]"><Check size={18} /></span>
-      <p className="mt-3 text-[11px] leading-5 text-[#718078]">{text}</p>
+    <div className={dark ? "rounded-xl border border-white/10 bg-white/10 px-3 py-2.5" : "rounded-xl bg-[#f7faf7] px-3 py-2.5"}>
+      <p className={dark ? "text-[8px] font-bold uppercase tracking-[0.11em] text-[#d5e9db]" : "text-[8px] font-bold uppercase tracking-[0.11em] text-[#829087]"}>{label}</p>
+      <p className={dark ? "mt-1 text-[10px] font-semibold text-white" : "mt-1 text-[10px] font-semibold text-[#465a4c]"}>{value}</p>
     </div>
   );
 }

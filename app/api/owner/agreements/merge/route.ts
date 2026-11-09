@@ -93,11 +93,6 @@ export async function POST(request: Request) {
       const assignedToTenant = agreements.every((entry) =>
         entry.asset.tenants.some((assignment) => assignment.tenantId === primary.tenantId),
       );
-      const sameDuration = agreements.every(
-        (entry) =>
-          entry.asset.agreementDurationUnit === primary.asset.agreementDurationUnit &&
-          entry.asset.agreementDurationValue === primary.asset.agreementDurationValue,
-      );
       const noNestedGroups = agreements.every(
         (entry) => !entry.mergedIntoAgreementId && entry.mergedMembers.length === 0,
       );
@@ -108,12 +103,11 @@ export async function POST(request: Request) {
         !sameBuilding ||
         !ownedBySession ||
         !assignedToTenant ||
-        !sameDuration ||
         !noNestedGroups ||
         !distinctAssets
       ) {
         throw new AgreementMergeError(
-          "Select one unmerged agreement per asset. Agreements must belong to the same tenant and building and use matching duration settings.",
+          "Select one unmerged agreement per asset. Agreements must belong to the same tenant and building before creating a combined agreement.",
           409,
         );
       }

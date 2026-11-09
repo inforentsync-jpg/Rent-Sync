@@ -10,35 +10,32 @@ export type MobileSession = {
 };
 
 const sessionKey = "rent-sync-session";
-const apiUrlKey = "rent-sync-api-url";
+const apiBaseUrl = "https://rentsync-theta.vercel.app";
 
 async function readValue(key: string) {
-  if (Platform.OS === "web") {
-    const storage = key === sessionKey ? globalThis.sessionStorage : globalThis.localStorage;
-    return typeof storage === "undefined" ? null : storage.getItem(key);
-  }
-  return SecureStore.getItemAsync(key);
+  if (Platform.OS !== "web") return SecureStore.getItemAsync(key);
+  return typeof globalThis.sessionStorage === "undefined"
+    ? null
+    : globalThis.sessionStorage.getItem(key);
 }
 
 async function writeValue(key: string, value: string) {
-  if (Platform.OS === "web") {
-    const storage = key === sessionKey ? globalThis.sessionStorage : globalThis.localStorage;
-    if (typeof storage === "undefined") {
+  if (Platform.OS !== "web") {
+    await SecureStore.setItemAsync(key, value);
+  } else {
+    if (typeof globalThis.sessionStorage === "undefined") {
       throw new Error("Browser storage is unavailable.");
     }
-    storage.setItem(key, value);
-    return;
+    globalThis.sessionStorage.setItem(key, value);
   }
-  await SecureStore.setItemAsync(key, value);
 }
 
 async function deleteValue(key: string) {
-  if (Platform.OS === "web") {
-    const storage = key === sessionKey ? globalThis.sessionStorage : globalThis.localStorage;
-    if (typeof storage !== "undefined") storage.removeItem(key);
-    return;
+  if (Platform.OS !== "web") {
+    await SecureStore.deleteItemAsync(key);
+  } else if (typeof globalThis.sessionStorage !== "undefined") {
+    globalThis.sessionStorage.removeItem(key);
   }
-  await SecureStore.deleteItemAsync(key);
 }
 
 export async function readSession(): Promise<MobileSession | null> {
@@ -78,21 +75,5 @@ export async function clearSession() {
 }
 
 export async function readApiBaseUrl() {
-  const configured = process.env.EXPO_PUBLIC_API_URL;
-  const saved = await readValue(apiUrlKey);
-  const fallback = __DEV__
-    ? Platform.OS === "android"
-      ? "http://10.0.2.2:3000"
-      : "http://localhost:3000"
-    : "";
-  return (saved || configured || fallback).replace(/\/+$/, "");
-}
-
-export async function saveApiBaseUrl(value: string) {
-  const url = value.trim().replace(/\/+$/, "");
-  if (!/^https?:\/\/[^/\s]+$/i.test(url)) {
-    throw new Error("Enter a valid server address, such as https://your-domain.com.");
-  }
-  await writeValue(apiUrlKey, url);
-  return url;
+  return __DEV__ && Platform.OS === "web" ? "http://localhost:3001" : apiBaseUrl;
 }

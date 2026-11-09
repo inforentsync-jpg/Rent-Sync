@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/database";
 import { generateAgreementPdf } from "@/lib/agreement-pdf.clean";
 import { agreementContentDisposition, agreementDownloadFilename } from "@/lib/agreement-download-filename";
+import { getPublicTenantData } from "@/lib/public-tenant";
 import { shouldUseDatabase } from "@/lib/storage-mode";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +30,16 @@ export async function GET(
 
   try {
     const tokenHash = createHash("sha256").update(token).digest("hex");
+    const sharedProfile = await getPublicTenantData(token);
+    if (!sharedProfile) {
+      return NextResponse.json({ error: "This shared tenant page is unavailable." }, { status: 404 });
+    }
+    if (!sharedProfile.profileComplete) {
+      return NextResponse.json(
+        { error: "Complete the tenant profile before viewing shared agreements." },
+        { status: 403, headers: { "Cache-Control": "no-store" } },
+      );
+    }
     const tenant = await prisma.tenant.findUnique({
       where: { publicShareTokenHash: tokenHash },
       select: { id: true },
