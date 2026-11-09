@@ -7,6 +7,7 @@ type RequestOptions = {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: unknown;
   token?: string;
+  cache?: RequestCache;
 };
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}) {
@@ -22,6 +23,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}) 
         "x-rent-sync-client": "mobile",
         ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
       },
+      ...(options.cache ? { cache: options.cache } : {}),
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
     });
   } catch {
@@ -95,7 +97,7 @@ export function authenticatedRequest<T>(
 }
 
 export function getOwnerPortfolio<T>(session: MobileSession) {
-  return authenticatedRequest<T>(session, "/api/owner/portfolio");
+  return authenticatedRequest<T>(session, "/api/owner/portfolio", { cache: "no-store" });
 }
 
 export function getTenantShareLinks<T>(session: MobileSession) {

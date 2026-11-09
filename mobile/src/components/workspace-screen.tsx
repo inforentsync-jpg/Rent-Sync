@@ -475,11 +475,47 @@ export default function WorkspaceScreen({
   const [error, setError] = useState("");
   const [createKind, setCreateKind] = useState<CreateKind | null>(null);
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
-  const [reviewing, setReviewing] = useState<{ agreement: Agreement; readOnly: boolean } | null>(null);
+  const [reviewing, setReviewing] = useState<{
+    agreement: Agreement;
+    readOnly: boolean;
+    portfolio?: Portfolio;
+    profile?: Profile;
+  } | null>(null);
+  const [openingReview, setOpeningReview] = useState(false);
   const [resetAccount, setResetAccount] = useState<{ account: Account; type: AdminType } | null>(null);
 
-  function openReview(agreement: Agreement, readOnly = false) {
-    setReviewing({ agreement, readOnly: readOnly || session.role !== "OWNER" });
+  async function openReview(agreement: Agreement, readOnly = false) {
+    if (session.role !== "OWNER" || readOnly) {
+      setReviewing({ agreement, readOnly: true });
+      return;
+    }
+
+    setOpeningReview(true);
+    setError("");
+    try {
+      const [portfolioResponse, nextProfile] = await Promise.all([
+        getOwnerPortfolio<Portfolio>(session),
+        authenticatedRequest<{ profile: Profile }>(session, "/api/owner/profile", { cache: "no-store" }),
+      ]);
+      const nextPortfolio = normalizeOwnerPortfolio(portfolioResponse);
+      const currentAgreement = nextPortfolio.agreements.find((item) => item.id === agreement.id);
+      if (!currentAgreement) {
+        throw new Error("This agreement is no longer available. Refresh your workspace and try again.");
+      }
+
+      setPortfolio(nextPortfolio);
+      setProfile(nextProfile.profile);
+      setReviewing({
+        agreement: currentAgreement,
+        readOnly: false,
+        portfolio: nextPortfolio,
+        profile: nextProfile.profile,
+      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to refresh agreement details.");
+    } finally {
+      setOpeningReview(false);
+    }
   }
 
   const loadData = useCallback(async () => {
@@ -664,8 +700,8 @@ export default function WorkspaceScreen({
         readOnly={reviewing?.readOnly ?? false}
         session={session}
         portal={tenantPortal}
-        portfolio={portfolio}
-        ownerProfile={profile}
+        portfolio={reviewing?.portfolio ?? portfolio}
+        ownerProfile={reviewing?.profile ?? profile}
         onClose={() => setReviewing(null)}
         onSignOut={() => void signOut()}
         onApproved={() => {
@@ -673,6 +709,12 @@ export default function WorkspaceScreen({
           refresh();
         }}
       />
+      {openingReview ? (
+        <View style={styles.reviewRefreshingOverlay} accessibilityRole="progressbar">
+          <ActivityIndicator size="small" color={colors.forest} />
+          <Text style={styles.reviewRefreshingText}>Refreshing latest agreement details...</Text>
+        </View>
+      ) : null}
       <PasswordSheet
         key={resetAccount?.account.id ?? "password-closed"}
         selected={resetAccount}
@@ -3841,6 +3883,7 @@ export function AgreementReviewSheet({
                   </Panel>
                   <Panel style={styles.reviewInfo}>
                     <Text style={styles.cardTitle}>Tenant details</Text>
+                    <Text style={styles.reviewSavedProfileNote}>Latest saved tenant profile loaded. Review it and edit only if needed.</Text>
                     <Field label="Tenant full name *" value={approvalDetails.tenantFullName} onChangeText={(value) => updateApprovalDetail("tenantFullName", value)} maxLength={120} />
                     <Field label="Mobile number *" value={approvalDetails.tenantMobileNumber} onChangeText={(value) => updateApprovalDetail("tenantMobileNumber", value)} keyboardType="phone-pad" maxLength={15} />
                     <Field label="Business name *" value={approvalDetails.tenantBusinessName} onChangeText={(value) => updateApprovalDetail("tenantBusinessName", value)} maxLength={160} />
@@ -4199,6 +4242,19 @@ const styles = StyleSheet.create({
   ownerScroll: { flex: 1 },
   ownerContent: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 24, gap: 9 },
   ownerError: { paddingHorizontal: 14, paddingTop: 10 },
+  reviewRefreshingOverlay: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    backgroundColor: "rgba(255,255,255,0.82)",
+  },
+  reviewRefreshingText: { color: colors.forest, fontSize: 12, fontWeight: "700" },
   ownerRecordCount: { color: colors.muted, fontSize: 11, fontWeight: "600", paddingHorizontal: 3, paddingBottom: 2 },
   buildingTotals: { flexDirection: "row", gap: 9 },
   buildingTotalCard: { flex: 1, minWidth: 0, minHeight: 76, justifyContent: "center", gap: 7, paddingHorizontal: 12, paddingVertical: 11, borderWidth: 1, borderColor: colors.line, borderRadius: 14, backgroundColor: colors.surface },
@@ -4354,6 +4410,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 7 },
     elevation: 2,
   },
+  reviewSavedProfileNote: { color: colors.muted, fontSize: 12, lineHeight: 17 },
   reviewFactsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",

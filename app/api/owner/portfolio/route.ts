@@ -115,7 +115,7 @@ export async function GET() {
       if (!portfolio) {
         return NextResponse.json({ error: "Owner account was not found." }, { status: 404 });
       }
-      return NextResponse.json(portfolio);
+      return NextResponse.json(portfolio, { headers: { "Cache-Control": "no-store" } });
     } catch (error) {
       console.error("Unable to load owner portfolio.", error);
       return NextResponse.json({ error: "Unable to load your portfolio." }, { status: 503 });
@@ -310,7 +310,7 @@ export async function GET() {
         ...template,
         assetIds: mappedAssets.map(({ assetId }) => assetId),
       })),
-    });
+    }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Unable to load database owner portfolio.", error);
     return NextResponse.json(

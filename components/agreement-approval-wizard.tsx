@@ -363,7 +363,7 @@ export default function AgreementApprovalWizard({
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-7">
           {step.id === "kyc" ? (
             <>
-              <ReviewHeading title="Mandatory agreement details" text={readOnly ? "Tenant and unit details." : "Complete every required field before approval. These values are saved to the owner, tenant, property, and unit records and used in the PDF."} />
+              <ReviewHeading title="Mandatory agreement details" text={readOnly ? "Tenant and unit details." : "Latest saved tenant profile details are prefilled. Review them and edit only if needed before approval."} />
               {readOnly ? (
                 <div className="grid gap-3 sm:grid-cols-2">
                   <ReviewValue label="Tenant" value={tenantName} />
@@ -388,6 +388,7 @@ export default function AgreementApprovalWizard({
                   </section>
                   <section className="rounded-xl border border-[#e7ece7] p-3 sm:p-4">
                     <h4 className="mb-3 text-[11px] font-semibold text-[#294034]">Tenant details</h4>
+                    <p className="mb-3 text-[10px] leading-4 text-[#718078]">Latest saved tenant profile loaded. Review it and edit only if needed.</p>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <ApprovalField label="Tenant full name" required value={tenantDetails.fullName} onChange={(value) => { setTenantDetails((current) => ({ ...current, fullName: value })); setError(""); }} />
                       <ApprovalField label="Tenant mobile" required value={tenantDetails.mobileNumber} inputMode="numeric" maxLength={15} onChange={(value) => { setTenantDetails((current) => ({ ...current, mobileNumber: value.replace(/\D/g, "") })); setError(""); }} />

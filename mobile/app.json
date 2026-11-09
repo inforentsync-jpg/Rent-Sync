@@ -2,7 +2,7 @@
   "expo": {
     "name": "Rent-Sync",
     "slug": "rent-sync",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/rent-sync-icon.png",
     "scheme": "rentsync",
@@ -12,7 +12,7 @@
     },
     "android": {
       "package": "com.inforentsync.rentsync",
-      "versionCode": 2,
+      "versionCode": 3,
       "adaptiveIcon": {
         "backgroundColor": "#102E25",
         "foregroundImage": "./assets/images/rent-sync-foreground.png",

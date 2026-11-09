@@ -343,28 +343,32 @@ export default function OwnerDashboard() {
   const selectedRecordIds =
     recordSelection.scope === selectionScope ? recordSelection.ids : [];
 
+  const fetchPortfolio = useCallback(async () => {
+    const response = await fetch("/api/owner/portfolio", { cache: "no-store" });
+    const payload = await response.json() as Partial<Portfolio> & { error?: string };
+    if (!response.ok) throw new Error(payload.error || "Unable to load your portfolio.");
+    return {
+      owner: payload.owner ?? null,
+      companies: payload.companies ?? [],
+      buildings: payload.buildings ?? [],
+      assets: payload.assets ?? [],
+      tenants: payload.tenants ?? [],
+      agreements: payload.agreements ?? [],
+      deletedAgreements: payload.deletedAgreements ?? [],
+      termsTemplates: payload.termsTemplates ?? [],
+    } satisfies Portfolio;
+  }, []);
+
   const loadPortfolio = useCallback(async () => {
     try {
-      const response = await fetch("/api/owner/portfolio", { cache: "no-store" });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Unable to load your portfolio.");
-      setPortfolio({
-        owner: payload.owner ?? null,
-        companies: payload.companies ?? [],
-        buildings: payload.buildings ?? [],
-        assets: payload.assets ?? [],
-        tenants: payload.tenants ?? [],
-        agreements: payload.agreements ?? [],
-        deletedAgreements: payload.deletedAgreements ?? [],
-        termsTemplates: payload.termsTemplates ?? [],
-      });
+      setPortfolio(await fetchPortfolio());
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to load your portfolio.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fetchPortfolio]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadPortfolio(), 0);
@@ -915,8 +919,19 @@ export default function OwnerDashboard() {
     setMobileMenu(false);
   }
 
-  function openAgreementReview(agreementId: string) {
-    setReviewingAgreementId(agreementId);
+  async function openAgreementReview(agreementId: string) {
+    try {
+      const refreshedPortfolio = await fetchPortfolio();
+      setPortfolio(refreshedPortfolio);
+      if (!refreshedPortfolio.agreements.some((agreement) => agreement.id === agreementId)) {
+        setError("This agreement is no longer available. Refresh your portfolio and try again.");
+        return;
+      }
+      setError("");
+      setReviewingAgreementId(agreementId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to refresh agreement details.");
+    }
   }
 
   async function mergeAgreements(agreements: Agreement[], assets: Asset[]) {
