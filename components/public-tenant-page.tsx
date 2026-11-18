@@ -1,15 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  ArrowRight,
+  BadgeCheck,
   Building2,
   Check,
+  CircleAlert,
   FileDown,
   ShieldCheck,
+  Sparkles,
+  X,
 } from "lucide-react";
 import { type ReviewableAgreement } from "@/components/agreement-approval-wizard";
 import {
   publicTenantProfileFields,
+  publicTenantProfileFieldNames,
   type PublicTenantProfileField,
 } from "@/lib/public-tenant-profile-fields";
 
@@ -305,22 +311,26 @@ function PublicTenantProfileCompletion({  token,
   data: PublicTenantData;
 }) {
   const [values, setValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(data.missingProfileFields.map((field) => [field, data.tenant[field] ?? ""])),
+    Object.fromEntries(publicTenantProfileFieldNames.map((field) => [field, data.tenant[field] ?? ""])),
   );
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  function resetTenantDetails() {
-    setValues((current) => {
-      const next = { ...current };
-      const preservedName = data.tenant.fullName || current.fullName || "";
-      for (const field of Object.keys(publicTenantProfileFields) as PublicTenantProfileField[]) {
-        next[field] = field === "fullName" ? preservedName : "";
-      }
-      return next;
-    });
-  }
+  useEffect(() => {
+    if (!showForm) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape" && !saving) setShowForm(false);
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [showForm, saving]);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -331,7 +341,7 @@ function PublicTenantProfileCompletion({  token,
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(Object.fromEntries(
-          data.missingProfileFields.map((field) => [field, values[field] ?? ""]),
+          publicTenantProfileFieldNames.map((field) => [field, values[field] ?? ""]),
         )),
       });
       const payload: unknown = await response.json().catch(() => null);
@@ -350,73 +360,137 @@ function PublicTenantProfileCompletion({  token,
   }
 
   return (
-    <main className="min-h-screen bg-[#f4f7f4] text-[#17271e]">
-      <header className="border-b border-[#e6ede7] bg-white">
-        <div className="mx-auto flex min-h-[68px] max-w-[1120px] items-center justify-between gap-3 px-4 sm:px-7">
-          <div className="flex items-center gap-2.5">
-            <span className="grid size-9 place-items-center rounded-xl bg-[#176b4b] text-white"><Building2 size={17} /></span>
-            <span className="text-[17px] font-bold tracking-[-0.06em]">rent<span className="text-[#176b4b]">sync</span></span>
+    <main className="relative min-h-screen overflow-hidden bg-[#f4f7f4] text-[#17271e]">
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[470px] bg-[radial-gradient(ellipse_at_50%_-20%,_rgba(40,128,91,0.13),_transparent_68%)]" />
+      <header className="relative border-b border-[#e6ede7]/80 bg-white/90 backdrop-blur-xl">
+        <div className="mx-auto flex min-h-[64px] max-w-[1120px] items-center justify-between gap-3 px-4 sm:min-h-[76px] sm:gap-4 sm:px-8">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            <span className="grid size-9 place-items-center rounded-[13px] bg-gradient-to-br from-[#21835e] to-[#10583d] text-white shadow-[0_8px_18px_-9px_rgba(17,94,64,0.8)] sm:size-10 sm:rounded-[14px]">
+              <Building2 size={18} />
+            </span>
+            <span className="text-[17px] font-black tracking-[-0.07em] sm:text-[18px]">rent<span className="text-[#176b4b]">sync</span></span>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowForm((visible) => !visible)}
-            className="min-h-10 rounded-xl bg-[#176b4b] px-3 text-[10px] font-semibold text-white transition hover:bg-[#10583c] sm:px-4 sm:text-[11px]"
-          >
-            Your profile is incomplete Â· {showForm ? "Hide form" : "Complete now"}
-          </button>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <span className="hidden items-center gap-1.5 rounded-full border border-[#f1dfb8] bg-[#fffaf0] px-3 py-2 text-[11px] font-semibold text-[#895f1d] min-[380px]:inline-flex">
+              <CircleAlert size={14} /> Profile incomplete
+            </span>
+          </div>
         </div>
       </header>
-      <div className="mx-auto max-w-[760px] px-4 py-8 sm:px-7 sm:py-12">
-        <section className="rounded-[24px] bg-[#123d2c] px-5 py-7 text-white shadow-[0_18px_50px_-28px_rgba(18,61,44,0.65)] sm:px-8 sm:py-9">
-          <p className="text-[10px] font-bold uppercase tracking-[0.17em] text-[#a6d2b3]">Tenant profile</p>
-          <h1 className="mt-3 text-[26px] font-semibold tracking-[-0.05em] sm:text-[34px]">
-            {data.tenant.fullName || "Complete your profile"}
-          </h1>
-          <p className="mt-2 max-w-[540px] text-[12px] leading-6 text-white/75">
-            Complete the missing details to explore your shared properties and agreements.
-          </p>
+      <div className="relative mx-auto max-w-[1020px] px-4 pb-8 pt-5 min-[380px]:px-5 sm:px-8 sm:pb-16 sm:pt-14">
+        <section className="relative overflow-hidden rounded-[24px] bg-gradient-to-br from-[#104934] via-[#14553f] to-[#0b3025] px-5 py-6 text-white shadow-[0_26px_55px_-34px_rgba(11,49,39,0.8)] min-[380px]:rounded-[28px] min-[380px]:px-6 min-[380px]:py-7 sm:rounded-[36px] sm:px-12 sm:py-12 sm:shadow-[0_32px_70px_-38px_rgba(11,49,39,0.8)]">
+          <div aria-hidden="true" className="pointer-events-none absolute -right-20 -top-32 size-[340px] rounded-full border border-white/[0.07] sm:size-[440px]" />
+          <div aria-hidden="true" className="pointer-events-none absolute -right-6 -top-20 size-[240px] rounded-full border border-white/[0.08] sm:size-[340px]" />
+          <div className="relative max-w-[620px]">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.08] px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-[0.14em] text-[#c5ead3] sm:gap-2 sm:px-3 sm:text-[10px] sm:tracking-[0.16em]">
+              <Sparkles size={12} /> Tenant profile
+            </span>
+            <h1 className="mt-4 break-words text-[31px] font-semibold leading-[1.08] tracking-[-0.06em] min-[380px]:text-[34px] sm:mt-6 sm:text-[52px] sm:tracking-[-0.065em]">
+              {data.tenant.fullName ? `Welcome, ${data.tenant.fullName}` : "Let’s complete your profile"}
+            </h1>
+            <p className="mt-3 max-w-[520px] text-[13px] leading-6 text-white/75 sm:mt-4 sm:text-[15px] sm:leading-7">
+              Add a few missing details to securely unlock your shared property and rental agreement.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowForm(true)}
+              className="group mt-5 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-white px-5 text-[13px] font-bold text-[#174c38] shadow-lg shadow-black/10 transition hover:-translate-y-0.5 hover:bg-[#f1f8f2] sm:mt-7 sm:w-auto"
+            >
+              Add missing details <ArrowRight size={16} className="transition-transform group-hover:translate-x-0.5" />
+            </button>
+          </div>
+          <div className="relative mt-6 grid gap-2.5 border-t border-white/15 pt-4 text-[10px] font-medium text-white/70 min-[420px]:grid-cols-2 sm:mt-11 sm:flex sm:flex-wrap sm:items-center sm:gap-x-6 sm:gap-y-3 sm:pt-5 sm:text-[11px]">
+            <span className="inline-flex items-center gap-2"><ShieldCheck size={14} className="shrink-0 text-[#a9e3bb]" /> Your information stays protected</span>
+            <span className="inline-flex items-center gap-2"><BadgeCheck size={14} className="shrink-0 text-[#a9e3bb]" /> Only required details are requested</span>
+          </div>
         </section>
-        <div className="mt-4 rounded-2xl border border-[#dce9df] bg-white px-4 py-3.5 text-[11px] leading-5 text-[#718078]">
-          Property and agreement information stays hidden until the required tenant profile fields are submitted.
-        </div>
-        {showForm ? (
-          <form onSubmit={(event) => void submit(event)} className="mt-4 rounded-2xl border border-[#e5ece6] bg-white p-5 shadow-[0_8px_28px_-24px_rgba(26,54,36,0.3)] sm:p-7">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-[17px] font-semibold tracking-[-0.03em] text-[#203328]">Complete your profile</h2>
-                <p className="mt-1 text-[11px] text-[#718078]">Only the missing required fields are shown.</p>
+
+        <section className="mt-4 flex flex-col gap-3 rounded-[20px] border border-[#e3ebe4] bg-white/95 p-4 shadow-[0_14px_38px_-30px_rgba(27,56,39,0.4)] min-[380px]:p-5 sm:mt-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+          <div className="flex items-start gap-3">
+            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#fff5df] text-[#a66a1d] sm:size-10"><CircleAlert size={17} /></span>
+            <div>
+              <p className="text-[12px] font-bold text-[#24382d] sm:text-[13px]">One last step to access your rental</p>
+              <p className="mt-1 text-[11px] leading-[1.55] text-[#748178] sm:text-[12px] sm:leading-5">
+                {data.missingProfileFields.length} required {data.missingProfileFields.length === 1 ? "detail is" : "details are"} still missing. Property and agreement information will appear once your profile is complete.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {showForm ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-[#10251bcc] p-0 backdrop-blur-sm sm:items-center sm:p-6"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !saving) setShowForm(false);
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="profile-dialog-title"
+            className="my-auto flex max-h-[100dvh] w-full max-w-[620px] flex-col overflow-hidden rounded-t-[24px] border border-white/70 bg-white pb-[env(safe-area-inset-bottom)] shadow-[0_36px_100px_-32px_rgba(0,0,0,0.55)] sm:max-h-[calc(100dvh-3rem)] sm:rounded-[30px] sm:pb-0"
+          >
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[#edf1ed] px-4 py-4 min-[380px]:px-5 sm:gap-4 sm:px-7 sm:py-6">
+              <div className="flex items-start gap-3">
+                <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#eaf5ed] text-[#176b4b] sm:size-11 sm:rounded-2xl"><Building2 size={18} /></span>
+                <div>
+                  <p className="text-[9px] font-black uppercase tracking-[0.17em] text-[#6c8c77]">Tenant profile</p>
+                  <h2 id="profile-dialog-title" className="mt-1 text-[18px] font-bold tracking-[-0.045em] text-[#203328] min-[380px]:text-[20px] sm:text-[23px]">Review your profile</h2>
+                  <p className="mt-1 text-[10px] leading-4 text-[#78857d] sm:text-[11px] sm:leading-5">Check your details and correct anything that needs updating.</p>
+                </div>
               </div>
               <button
                 type="button"
-                onClick={resetTenantDetails}
-                className="rounded-lg border border-[#dfe8e1] bg-[#f7faf7] px-3 py-2 text-[10px] font-semibold text-[#1f4c3d] transition hover:bg-[#edf7ef]"
+                aria-label="Close profile form"
+                disabled={saving}
+                onClick={() => setShowForm(false)}
+                className="grid size-10 shrink-0 place-items-center rounded-xl text-[#738078] transition hover:bg-[#f1f5f1] hover:text-[#203328] disabled:opacity-50"
               >
-                Reset tenant details
+                <X size={18} />
               </button>
             </div>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
-              {data.missingProfileFields.map((field) => (
-                <label key={field} className="text-[10px] font-semibold text-[#465a4c]">
-                  {publicTenantProfileFields[field].label}
-                  <input
-                    required
-                    type={field === "mobileNumber" || field === "aadhaarNumber" || field === "postalCode" ? "tel" : "text"}
-                    inputMode={field === "mobileNumber" ? "tel" : field === "aadhaarNumber" || field === "postalCode" ? "numeric" : undefined}
-                    maxLength={publicTenantProfileFields[field].maxLength}
-                    value={values[field] ?? ""}
-                    onChange={(event) => setValues((current) => ({ ...current, [field]: event.target.value }))}
-                    className="mt-1.5 h-11 w-full rounded-lg border border-[#dfe8e1] bg-[#fcfdfc] px-3 text-[12px] outline-none transition focus:border-[#8cbd9b]"
-                  />
-                </label>
-              ))}
-            </div>
-            {error ? <p role="alert" className="mt-4 rounded-lg bg-[#fff4ed] px-3 py-2 text-[11px] text-[#995634]">{error}</p> : null}
-            <button type="submit" disabled={saving} className="mt-5 min-h-11 w-full rounded-xl bg-[#176b4b] px-4 text-[11px] font-semibold text-white transition hover:bg-[#10583c] disabled:opacity-60">
-              {saving ? "Submitting..." : "Submit and explore"}
-            </button>
-          </form>
-        ) : null}
-      </div>
+            <form onSubmit={(event) => void submit(event)} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 min-[380px]:px-5 sm:px-7 sm:py-6">
+              <div className="mb-4 flex items-center justify-between gap-2 rounded-xl bg-[#f6faf6] px-3 py-2.5 sm:mb-5 sm:gap-3 sm:px-4 sm:py-3">
+                <p className="text-[10px] leading-4 text-[#637369] sm:text-[11px] sm:leading-5">All profile details are shown. You can edit completed fields too.</p>
+              </div>
+              <div className="grid gap-3.5 min-[560px]:grid-cols-2 sm:gap-4">
+                {publicTenantProfileFieldNames.map((field) => (
+                  <label key={field} className="text-[11px] font-semibold text-[#3d5144]">
+                    {publicTenantProfileFields[field].label}
+                    {field === "addressLine2" ? <span className="ml-1 font-normal text-[#8b978f]">(optional)</span> : null}
+                    <input
+                      required={field !== "addressLine2"}
+                      type={field === "mobileNumber" || field === "aadhaarNumber" || field === "postalCode" ? "tel" : "text"}
+                      inputMode={field === "mobileNumber" ? "tel" : field === "aadhaarNumber" || field === "postalCode" ? "numeric" : undefined}
+                      maxLength={publicTenantProfileFields[field].maxLength}
+                      autoComplete={field === "fullName" ? "name" : undefined}
+                      placeholder={field === "fullName" ? "Enter your Aadhaar name" : undefined}
+                      value={values[field] ?? ""}
+                      onChange={(event) => setValues((current) => ({ ...current, [field]: event.target.value }))}
+                      className="mt-1.5 h-12 w-full rounded-xl border border-[#dfe8e1] bg-[#fcfdfc] px-3.5 text-[16px] text-[#203328] outline-none transition placeholder:text-[#a0aca3] focus:border-[#70a984] focus:bg-white focus:ring-4 focus:ring-[#176b4b]/[0.08] sm:text-[13px]"
+                    />
+                  </label>
+                ))}
+              </div>
+              {error ? <p role="alert" className="mt-4 rounded-xl border border-[#f0d7ca] bg-[#fff7f2] px-4 py-3 text-[12px] leading-5 text-[#995634]">{error}</p> : null}
+              <div className="mt-5 flex flex-col-reverse gap-2 border-t border-[#edf1ed] pt-4 sm:mt-6 sm:flex-row sm:justify-end sm:gap-2.5 sm:pt-5">
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => setShowForm(false)}
+                  className="min-h-11 rounded-xl border border-[#e1e9e2] px-5 text-[12px] font-semibold text-[#54665a] transition hover:bg-[#f7faf7] disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button type="submit" disabled={saving} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#176b4b] px-5 text-[12px] font-bold text-white shadow-[0_10px_22px_-14px_rgba(23,107,75,0.8)] transition hover:bg-[#10583c] disabled:cursor-wait disabled:opacity-60">
+                  {saving ? "Saving profile..." : "Save profile"} {!saving ? <ArrowRight size={15} /> : null}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

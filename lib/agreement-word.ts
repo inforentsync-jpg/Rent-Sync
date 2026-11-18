@@ -7,7 +7,6 @@ import {
   PageNumber,
   Packer,
   Paragraph,
-  ShadingType,
   Table,
   TableCell,
   TableLayoutType,
@@ -25,7 +24,7 @@ const PAGE_MARGIN_TWIPS = 600;
 const TABLE_WIDTH_TWIPS = PAGE_WIDTH_TWIPS - PAGE_MARGIN_TWIPS * 2;
 const FONT_MALAYALAM = "Noto Sans Malayalam";
 const FONT_LATIN = "Arial";
-const BLACK_BORDER = { style: BorderStyle.SINGLE, size: 5, color: "333333" } as const;
+const BLACK_BORDER = { style: BorderStyle.SINGLE, size: 6, color: "000000" } as const;
 const TABLE_BORDERS: ITableBordersOptions = {
   top: BLACK_BORDER,
   bottom: BLACK_BORDER,
@@ -72,29 +71,38 @@ function paragraph(
 function cell(
   content: string | string[],
   width: number,
-  options: { bold?: boolean; size?: number; header?: boolean; minHeight?: number } = {},
+  options: {
+    bold?: boolean;
+    size?: number;
+    header?: boolean;
+    minHeight?: number;
+    alignment?: (typeof AlignmentType)[keyof typeof AlignmentType];
+  } = {},
 ) {
   const lines = Array.isArray(content) ? content : [content];
   return new TableCell({
     width: { size: width, type: WidthType.DXA },
     margins: { top: 85, bottom: 85, left: 100, right: 100 },
     verticalAlign: VerticalAlignTable.TOP,
-    shading: options.header
-      ? { type: ShadingType.CLEAR, fill: "E8E8E8", color: "auto" }
-      : undefined,
     children: lines.length
       ? lines.map((line) => paragraph(line, {
           size: options.size ?? 19,
           bold: options.bold ?? false,
+          alignment: options.alignment,
           after: 45,
         }))
-      : [paragraph("", { size: options.size ?? 19, after: 45 })],
+      : [paragraph("", { size: options.size ?? 19, alignment: options.alignment, after: 45 })],
   });
 }
 
 function table(
   rows: Array<{
-    cells: Array<{ text: string | string[]; bold?: boolean; header?: boolean }>;
+    cells: Array<{
+      text: string | string[];
+      bold?: boolean;
+      header?: boolean;
+      alignment?: (typeof AlignmentType)[keyof typeof AlignmentType];
+    }>;
     minHeight?: number;
   }>,
   columnWidths: number[],
@@ -114,6 +122,7 @@ function table(
         bold: entry.bold,
         header: entry.header,
         size: fontSize,
+        alignment: entry.alignment,
       })),
     })),
   });
@@ -225,7 +234,7 @@ export async function generateAgreementWord(data: AgreementPdfData) {
       cells: [
         { text: ["ഒന്നാം കക്ഷി", "വാടകദാതാവ് (LESSOR)"], bold: true },
         { text: [`പേര്: ${data.ownerName}`, ...ownerLines.slice(1)] },
-        { text: ["ഒപ്പ്:", "", "", "തീയതി:" ] },
+        { text: "ഒപ്പ്:" },
       ],
     },
     {
@@ -233,7 +242,7 @@ export async function generateAgreementWord(data: AgreementPdfData) {
       cells: [
         { text: ["രണ്ടാം കക്ഷി", "വാടകക്കാരൻ (LESSEE)"], bold: true },
         { text: [`പേര്: ${data.tenantName}`, ...tenantLines.slice(1)] },
-        { text: ["ഒപ്പ്:", "", "", "തീയതി:"] },
+        { text: "ഒപ്പ്:" },
       ],
     },
   ], [2200, 6800, 2040]);
@@ -263,10 +272,19 @@ export async function generateAgreementWord(data: AgreementPdfData) {
 
   const termRows = getTerms(data);
   const termTable = table([
-    { cells: [{ text: "ക്രമം", bold: true, header: true }, { text: "നിബന്ധനകൾ", bold: true, header: true }] },
+    {
+      minHeight: 500,
+      cells: [
+        { text: "ക്രമം", bold: true, header: true, alignment: AlignmentType.CENTER },
+        { text: "നിബന്ധനകൾ", bold: true, header: true },
+      ],
+    },
     ...termRows.map((term) => ({
-      minHeight: 560,
-      cells: [{ text: String(term.number) }, { text: term.text }],
+      minHeight: 540,
+      cells: [
+        { text: String(term.number), bold: true, alignment: AlignmentType.CENTER },
+        { text: term.text },
+      ],
     })),
   ], [1150, TABLE_WIDTH_TWIPS - 1150], 19);
 
@@ -282,7 +300,6 @@ export async function generateAgreementWord(data: AgreementPdfData) {
 
   const firstParagraph = `ഒന്നാം പാർട്ടിയുടെ ഉടമസ്ഥതയിലുള്ളതും ${data.buildingName.trim()} എന്ന പേരിൽ അറിയപ്പെടുന്നതുമായ കെട്ടിടം, താഴെ പറയുന്ന നിബന്ധനകളും വ്യവസ്ഥകളും അനുസരിച്ച്, ഉടമയായ ${data.ownerName.trim()}, രണ്ടാം കക്ഷിയായ വാടകക്കാരൻ ${data.tenantName.trim()}-ന് ${duration(data)} വാടകയ്ക്ക് ഉപയോഗിക്കാൻ സമ്മതിച്ചിരിക്കുന്നു.`;
   const secondParagraph = "ഈ വാടകക്കരാർ, സ്റ്റാമ്പ് പേപ്പർ വാങ്ങിയ തീയതി പ്രകാരം പ്രാബല്യത്തിൽ വരുന്നതും, പാർട്ടികളുടെ വിവരം, വസ്തുവിന്റെ വിശദാംശങ്ങൾ എന്നിവ താഴെ ചേർക്കുന്ന പട്ടികയിൽ വ്യക്തമാക്കിയിരിക്കുന്നു.";
-  const renewal = "വാടകക്കാരൻ 11 മാസം കഴിഞ്ഞ് വാടക തുടരാൻ ആഗ്രഹിച്ചാൽ അടുത്ത വർഷവും പുതുക്കാവുന്നതാണ്. പുതുക്കുന്ന കരാറിൽ വാടക തുക മുൻവർഷത്തിന്റെ വാടകയിൽ കുറഞ്ഞത് 5% വരേക്കും വർധിപ്പിക്കാവുന്നതാണ്. കരാറിന്റെ പ്രവർത്തനം കൂടാതെ മൂന്ന് വർഷം വരെ ഉടമസ്ഥാവകാശത്തിന്റെ വിവേചനാധികാരത്തിൽ തുടർ നിബന്ധനകൾ നിശ്ചയിക്കാവുന്നതാണ്";
 
   const document = new Document({
     styles: {
@@ -335,9 +352,7 @@ export async function generateAgreementWord(data: AgreementPdfData) {
         partyTable,
         paragraph("കെട്ടിടവിവരം", { size: 26, bold: true, before: 220, after: 100, keepNext: true }),
         buildingTable,
-
         heading("പ്രധാന നിബന്ധനകളും വ്യവസ്ഥകളും", true),
-        paragraph(renewal, { size: 20, bold: true, after: 180 }),
         termTable,
 
         heading("സാക്ഷികൾ", true),

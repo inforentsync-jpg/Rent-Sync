@@ -7,6 +7,7 @@ import { getPublicTenantData } from "@/lib/public-tenant";
 import {
   getMissingPublicTenantProfileFields as getMissingFields,
   publicTenantProfileFields,
+  publicTenantProfileFieldNames,
   type PublicTenantProfileField,
 } from "@/lib/public-tenant-profile-fields";
 import { shouldUseDatabase } from "@/lib/storage-mode";
@@ -92,13 +93,13 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ to
       return NextResponse.json({ error: "Submit the missing tenant profile fields." }, { status: 400 });
     }
     const submitted = body as Record<string, unknown>;
-    const allowedFields = new Set<PublicTenantProfileField>(missingFields);
+    const allowedFields = new Set<PublicTenantProfileField>(publicTenantProfileFieldNames);
     const updates: Partial<Record<PublicTenantProfileField, string>> = {};
 
     for (const [field, rawValue] of Object.entries(submitted)) {
       if (!Object.hasOwn(publicTenantProfileFields, field) || !allowedFields.has(field as PublicTenantProfileField)) {
         return NextResponse.json(
-          { error: "Only incomplete tenant profile fields can be updated from this link." },
+          { error: "Only tenant profile fields can be updated from this link." },
           { status: 400 },
         );
       }
@@ -109,7 +110,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ to
       const fieldName = field as PublicTenantProfileField;
       const value = rawValue.trim();
       const fieldRule = publicTenantProfileFields[fieldName];
-      if (!value || value.length > fieldRule.maxLength) {
+      if ((!value && fieldName !== "addressLine2") || value.length > fieldRule.maxLength) {
         return NextResponse.json(
           { error: `Enter ${fieldRule.label.toLowerCase()} (maximum ${fieldRule.maxLength} characters).` },
           { status: 400 },
@@ -124,7 +125,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ to
       if (fieldName === "aadhaarNumber" && !/^\d{12}$/.test(normalized)) {
         return NextResponse.json({ error: "Aadhaar number must contain exactly 12 digits." }, { status: 400 });
       }
-      updates[fieldName] = normalized;
+      if ((tenant[fieldName] ?? "") !== normalized) {
+        updates[fieldName] = normalized;
+      }
     }
 
     const updatedTenant = { ...tenant, ...updates };
@@ -144,13 +147,15 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ to
       city: updatedTenant.city,
       postalCode: updatedTenant.postalCode,
     };
-    await prisma.$transaction(async (transaction) => {
-      await transaction.tenant.update({
-        where: { id: tenant.id },
-        data: { ...updates, fullAddress: formatPartyAddress(address) },
+    if (Object.keys(updates).length) {
+      await prisma.$transaction(async (transaction) => {
+        await transaction.tenant.update({
+          where: { id: tenant.id },
+          data: { ...updates, fullAddress: formatPartyAddress(address) },
+        });
+        await requireAgreementReapprovalForTenant(transaction, tenant.id);
       });
-      await requireAgreementReapprovalForTenant(transaction, tenant.id);
-    });
+    }
 
     const data = await getPublicTenantData(token);
     if (!data) {

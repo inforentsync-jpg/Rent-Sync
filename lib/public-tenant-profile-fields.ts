@@ -1,5 +1,5 @@
 export const publicTenantProfileFields = {
-  fullName: { label: "Tenant name", maxLength: 120 },
+  fullName: { label: "Full name (as per Aadhaar)", maxLength: 120 },
   mobileNumber: { label: "Mobile number", maxLength: 15 },
   businessName: { label: "Business name", maxLength: 160 },
   businessNature: { label: "Business nature", maxLength: 160 },
@@ -14,6 +14,7 @@ export const publicTenantProfileFields = {
 } as const;
 
 export type PublicTenantProfileField = keyof typeof publicTenantProfileFields;
+export const publicTenantProfileFieldNames = Object.keys(publicTenantProfileFields) as PublicTenantProfileField[];
 
 export const requiredPublicTenantProfileFields: PublicTenantProfileField[] = [
   "fullName",
@@ -43,7 +44,11 @@ export function isPublicTenantProfileFieldComplete(
 export function getMissingPublicTenantProfileFields(
   tenant: Partial<Record<PublicTenantProfileField, string | null>>,
 ) {
-  return requiredPublicTenantProfileFields.filter(
+  const missingFields = requiredPublicTenantProfileFields.filter(
     (field) => !isPublicTenantProfileFieldComplete(field, tenant[field]),
   );
+  if (missingFields.length && !missingFields.includes("fullName")) {
+    missingFields.unshift("fullName");
+  }
+  return missingFields;
 }

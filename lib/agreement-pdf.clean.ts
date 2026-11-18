@@ -402,11 +402,7 @@ async function drawPageTwo(document: PDFDocumentType, page: PDFPage, data: Agree
 async function drawPageThree(document: PDFDocumentType, page: PDFPage, data: AgreementPdfData, fontBytes: Buffer, totalPages: number) {
   void totalPages;
   await drawUnicodeText(document, page, "പ്രധാന നിബന്ധനകളും വ്യവസ്ഥകളും", fontBytes, 30, 744, 552, 15, true);
-
-  const renewal = "വാടകക്കാരൻ 11 മാസം കഴിഞ്ഞ് വാടക തുടരാൻ ആഗ്രഹിച്ചാൽ അടുത്ത വർഷവും പുതുക്കാവുന്നതാണ്. പുതുക്കുന്ന കരാറിൽ വാടക തുക മുൻവർഷത്തിന്റെ വാടകയിൽ കുറഞ്ഞത് 5% വരേക്കും വർധിപ്പിക്കാവുന്നതാണ്. കരാറിന്റെ പ്രവർത്തനം കൂടാതെ മൂന്ന് വർഷം വരെ ഉടമസ്ഥാവകാശത്തിന്റെ വിവേചനാധികാരത്തിൽ തുടർ നിബന്ധനകൾ നിശ്ചയിക്കാവുന്നതാണ്";
   let y = 694;
-  const renewalCount = await drawWrapped(document, page, renewal, fontBytes, 30, y, 552, 12, 16, true);
-  y -= renewalCount * (16 * TEXT_LINE_SCALE) + 16;
 
   const dynamicMap = new Map<number, string>();
   for (const group of data.templateTerms ?? []) {
