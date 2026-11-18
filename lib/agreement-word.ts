@@ -16,6 +16,7 @@ import {
   WidthType,
   type ITableBordersOptions,
 } from "docx";
+import { getAgreementTerms } from "@/lib/agreement-terms";
 import type { AgreementPdfData } from "@/lib/agreement-pdf.clean";
 
 const PAGE_WIDTH_TWIPS = 12240;
@@ -107,6 +108,7 @@ function table(
   }>,
   columnWidths: number[],
   fontSize = 19,
+  allowRowsToSplit = false,
 ) {
   return new Table({
     width: { size: TABLE_WIDTH_TWIPS, type: WidthType.DXA },
@@ -117,7 +119,8 @@ function table(
       height: row.minHeight
         ? { value: row.minHeight, rule: HeightRule.ATLEAST }
         : undefined,
-      cantSplit: true,
+      cantSplit: !allowRowsToSplit,
+      tableHeader: row.cells.every((entry) => entry.header === true),
       children: row.cells.map((entry, index) => cell(entry.text, columnWidths[index], {
         bold: entry.bold,
         header: entry.header,
@@ -165,37 +168,6 @@ function duration(data: AgreementPdfData) {
   const months = (end.getFullYear() - start.getFullYear()) * 12
     + end.getMonth() - start.getMonth() + 1;
   return `${Math.max(1, months)} മാസം`;
-}
-
-const FALLBACK_TERMS: Array<[number, string]> = [
-  [1, "കറന്റ്, വെള്ളം: വാടകക്കാരൻ നേരിട്ട് അടയ്ക്കണം."],
-  [2, "സേഫ്റ്റി ലൈസൻസ്: വാടകക്കാരൻ എടുക്കണം."],
-  [3, "ഉപയോഗം: ഈ സ്ഥലം ആവശ്യത്തിനായി ഉപയോഗിക്കേണ്ടതാണ്."],
-  [4, "ഉപ വാടക: ലീസുകാരന് ഈ ഉടമ്പടിയിലെ കെട്ടിടം മുഴുവനായോ ഭാഗികമായോ മറ്റാർക്കും വാടകയ്ക്ക് നൽകാനോ അനുവാദമില്ല."],
-  [5, "ഷെഡ്യൂൾ ആസ്തിയിൽ ലീസുകാരൻ മൂലമോ വാടകക്കാരൻ മൂലമോ സംഭവിക്കുന്ന നാശനഷ്ടങ്ങൾക്കും ഉത്തരവാദിത്തങ്ങൾക്കും ലീസുകാരൻ പൂർണമായും ഉത്തരവാദിയാകും."],
-  [6, "വാടകക്കാരൻ ഒഴിഞ്ഞതിന് ശേഷം, നാശനഷ്ടങ്ങൾ കുറച്ച ശേഷമുള്ള സുരക്ഷാദ്രവ്യം 15 ദിവസത്തിനുള്ളിൽ തിരിച്ചുനൽകപ്പെടും."],
-  [7, "വാടകക്കാരൻ തീയതിക്ക് മുൻപ് വാടക അടയ്ക്കാൻ കഴിയാതെ വന്നാൽ ഉടമയ്ക്ക് അഡ്വാൻസിൽ നിന്ന് തുക പിൻവലിക്കാനും ഒഴിപ്പിക്കാനും അവകാശമുണ്ട്."],
-  [8, "24 മണിക്കൂർ മുൻകൂട്ടി അറിയിപ്പിലൂടെ, ഉടമക്ക് അകത്തു പരിശോധന നടത്താം."],
-  [9, "ഗ്രൗണ്ട് ഫ്ളോറും ഫസ്റ്റ് ഫ്ളോറും ഉൾപ്പെടെ എല്ലാ ഷോപ്പ് ഉടമകൾക്കും പാർക്കിംഗ് മേഖല സമമായും പങ്കിട്ടായിരിക്കും."],
-  [10, "വാടകസ്ഥലം മുൻപേതുപോലെ കടയുടെ നെയിം ബോർഡ് സ്ഥാപിക്കുന്നതിനും നിർമ്മിക്കുന്നതിനും ഉടമയുടെ അനുമതി ആവശ്യമാണ്. അനുമതി ലഭിക്കാതെ ബോർഡുകൾ മാറ്റുകയോ സ്ഥാപിക്കുകയോ ചെയ്യരുത്."],
-  [11, "ഈ കരാർ പ്രകാരം ബാക്കിയുള്ള നിയമനിബന്ധനകൾക്കും പ്രവർത്തനത്തിനു അനുസൃതമായ നടപടികൾക്കും രണ്ട് പാർട്ടികളും ബാധ്യസ്ഥരാണ്. നിലവിലുള്ള നിയമങ്ങൾക്കും സർക്കാരിന്‍റെ ഉത്തരവുകൾക്കും ഇവ വിധേയമായിരിക്കും."],
-];
-
-function getTerms(data: AgreementPdfData) {
-  const dynamicTerms = new Map<number, string>();
-  for (const group of data.templateTerms ?? []) {
-    for (const item of group.items) {
-      const text = item.text?.trim();
-      if (text) dynamicTerms.set(item.position, text.replace(/^\s*\d+[.)]\s*/, ""));
-    }
-  }
-  return FALLBACK_TERMS.map(([number, text]) => ({
-    number,
-    text: dynamicTerms.get(number)
-      ?? (number === 3 && data.usageDescription?.trim()
-        ? `ഉപയോഗം: ഈ സ്ഥലം ${data.usageDescription.trim()} ആവശ്യത്തിനായി ഉപയോഗിക്കേണ്ടതാണ്.`
-        : text),
-  }));
 }
 
 export async function generateAgreementWord(data: AgreementPdfData) {
@@ -270,7 +242,7 @@ export async function generateAgreementWord(data: AgreementPdfData) {
     cells: [{ text: label }, { text: value }],
   })), [3600, 7440]);
 
-  const termRows = getTerms(data);
+  const termRows = getAgreementTerms(data);
   const termTable = table([
     {
       minHeight: 500,
@@ -280,13 +252,15 @@ export async function generateAgreementWord(data: AgreementPdfData) {
       ],
     },
     ...termRows.map((term) => ({
-      minHeight: 540,
       cells: [
         { text: String(term.number), bold: true, alignment: AlignmentType.CENTER },
         { text: term.text },
       ],
     })),
-  ], [1150, TABLE_WIDTH_TWIPS - 1150], 19);
+    ...(!termRows.length ? [{
+      cells: [{ text: "" }, { text: "ഈ കരാറിനായി നിബന്ധനകൾ ചേർത്തിട്ടില്ല." }],
+    }] : []),
+  ], [1150, TABLE_WIDTH_TWIPS - 1150], 19, true);
 
   const witnessTable = table([
     {
@@ -332,11 +306,10 @@ export async function generateAgreementWord(data: AgreementPdfData) {
               alignment: AlignmentType.CENTER,
               children: [
                 new TextRun({
-                  children: [PageNumber.CURRENT],
-                  size: 16,
-                  font: FONT_LATIN,
-                }),
-                textRun(" / 4", 16),
+                children: [PageNumber.CURRENT, " / ", PageNumber.TOTAL_PAGES],
+                size: 16,
+                font: FONT_LATIN,
+              }),
               ],
             }),
           ],

@@ -4,6 +4,7 @@ import type { PDFDocument as PDFDocumentType } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { getAgreementTerms, type AgreementTerm } from "@/lib/agreement-terms";
 
 export type AgreementPdfData = {
   agreementNumber: string;
@@ -54,9 +55,14 @@ const BORDER = rgb(0.18, 0.18, 0.18);
 const PAGE_WIDTH = 612;
 const PAGE_HEIGHT = 792;
 const MARGIN = 30;
-const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
 const TEXT_FONT_SCALE = 1.18;
 const TEXT_LINE_SCALE = 1.12;
+const TERMS_TOP = 694;
+const TERMS_BOTTOM = 55;
+const TERMS_HEADER_HEIGHT = 30;
+const TERMS_FONT_SIZE = 9.6;
+const TERMS_LINE_HEIGHT = 13.5;
+const TERMS_ROW_PADDING = 9;
 
 const embeddedFonts = new WeakMap<PDFDocumentType, PDFFont>();
 
@@ -69,10 +75,11 @@ async function drawUnicodeText(document: PDFDocumentType, page: PDFPage, text: s
   page.drawText(clean, { x, y: topY - displaySize, font, size: displaySize, color: BLACK, maxWidth });
 }
 
-function countWrappedLines(document: PDFDocumentType, text: string, maxWidth: number, fontSize: number) {
+function wrapTextLines(document: PDFDocumentType, text: string, maxWidth: number, fontSize: number) {
   const clean = text.replace(/\s+/g, " ").trim();
   const font = embeddedFonts.get(document);
-  if (!clean || !font) return 0;
+  if (!clean) return [];
+  if (!font) throw new Error("Malayalam Unicode font is not embedded in the PDF document.");
   const displaySize = fontSize * TEXT_FONT_SCALE;
   const lines: string[] = [];
   let current = "";
@@ -96,7 +103,7 @@ function countWrappedLines(document: PDFDocumentType, text: string, maxWidth: nu
     current = part;
   }
   if (current) lines.push(current);
-  return lines.length;
+  return lines;
 }
 
 function wrapPageOneText(document: PDFDocumentType, text: string, maxWidth: number, fontSize: number) {
@@ -158,35 +165,13 @@ function drawPageOneLines(document: PDFDocumentType, page: PDFPage, lines: strin
 }
 
 async function drawWrapped(document: PDFDocumentType, page: PDFPage, text: string, fontBytes: Buffer, x: number, topY: number, maxWidth: number, fontSize: number, lineHeight: number, bold = false, maxLines = 0) {
-  const clean = text.replace(/\s+/g, " ").trim();
-  if (!clean) return 0;
+  const lines = wrapTextLines(document, text, maxWidth, fontSize);
+  if (!lines.length) return 0;
   const font = embeddedFonts.get(document);
   if (!font) throw new Error("Malayalam Unicode font is not embedded in the PDF document.");
 
   const displaySize = fontSize * TEXT_FONT_SCALE;
   const displayLineHeight = lineHeight * TEXT_LINE_SCALE;
-  const lines: string[] = [];
-  let current = "";
-  for (const word of clean.split(" ")) {
-    const candidate = current ? `${current} ${word}` : word;
-    if (font.widthOfTextAtSize(candidate, displaySize) <= maxWidth) {
-      current = candidate;
-      continue;
-    }
-    if (current) lines.push(current);
-    if (font.widthOfTextAtSize(word, displaySize) <= maxWidth) {
-      current = word;
-      continue;
-    }
-    let part = "";
-    for (const char of Array.from(word)) {
-      const candidatePart = part + char;
-      if (font.widthOfTextAtSize(candidatePart, displaySize) <= maxWidth) part = candidatePart;
-      else { if (part) lines.push(part); part = char; }
-    }
-    current = part;
-  }
-  if (current) lines.push(current);
   if (maxLines > 0 && lines.length > maxLines) {
     lines.splice(maxLines);
     lines[maxLines - 1] = `${lines[maxLines - 1]}…`;
@@ -220,17 +205,20 @@ export async function generateAgreementPdf(data: AgreementPdfData) {
   document.registerFontkit(fontkit);
   const malayalamFont = await document.embedFont(fontBytes, { subset: true });
   embeddedFonts.set(document, malayalamFont);
-  while (document.getPageCount() < 4) document.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-  while (document.getPageCount() > 4) document.removePage(document.getPageCount() - 1);
+  const termPages = paginateAgreementTerms(document, getAgreementTerms(data));
+  const totalPages = termPages.length + 3;
+  while (document.getPageCount() < totalPages) document.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+  while (document.getPageCount() > totalPages) document.removePage(document.getPageCount() - 1);
 
   document.getPage(0).drawRectangle({ x: 0, y: 0, width: PAGE_WIDTH, height: PAGE_HEIGHT, color: rgb(1, 1, 1) });
-  for (let i = 1; i < 4; i++) document.getPage(i).drawRectangle({ x: 0, y: 0, width: PAGE_WIDTH, height: PAGE_HEIGHT, color: rgb(1, 1, 1) });
+  for (let i = 1; i < totalPages; i++) document.getPage(i).drawRectangle({ x: 0, y: 0, width: PAGE_WIDTH, height: PAGE_HEIGHT, color: rgb(1, 1, 1) });
 
-  const totalPages = document.getPageCount();
   await drawPageOne(document, document.getPage(0), data, fontBytes);
   await drawPageTwo(document, document.getPage(1), data, fontBytes, totalPages);
-  await drawPageThree(document, document.getPage(2), data, fontBytes, totalPages);
-  await drawPageFour(document, document.getPage(3), data, fontBytes, totalPages);
+  for (const [index, rows] of termPages.entries()) {
+    await drawTermsPage(document, document.getPage(index + 2), rows, fontBytes, index > 0);
+  }
+  await drawPageFour(document, document.getPage(totalPages - 1), data, fontBytes, totalPages);
 
   for (let index = 0; index < totalPages; index++) {
     const page = document.getPage(index);
@@ -399,62 +387,109 @@ async function drawPageTwo(document: PDFDocumentType, page: PDFPage, data: Agree
 
 }
 
-async function drawPageThree(document: PDFDocumentType, page: PDFPage, data: AgreementPdfData, fontBytes: Buffer, totalPages: number) {
-  void totalPages;
-  await drawUnicodeText(document, page, "പ്രധാന നിബന്ധനകളും വ്യവസ്ഥകളും", fontBytes, 30, 744, 552, 15, true);
-  let y = 694;
+type PdfTermRow = { number: string; lines: string[] };
 
-  const dynamicMap = new Map<number, string>();
-  for (const group of data.templateTerms ?? []) {
-    for (const item of group.items) {
-      const text = item.text?.trim();
-      if (text) dynamicMap.set(item.position, text.replace(/^\s*\d+[.)]\s*/, ""));
+function paginateAgreementTerms(document: PDFDocumentType, terms: AgreementTerm[]): PdfTermRow[][] {
+  const contentWidth = PAGE_WIDTH - MARGIN * 2 - 62 - 16;
+  const lineHeight = TERMS_LINE_HEIGHT * TEXT_LINE_SCALE;
+  const bodyHeight = TERMS_TOP - TERMS_HEADER_HEIGHT - TERMS_BOTTOM;
+  const maxLinesPerPage = Math.floor((bodyHeight - TERMS_ROW_PADDING) / lineHeight);
+  const pages: PdfTermRow[][] = [];
+  let rows: PdfTermRow[] = [];
+  let usedHeight = 0;
+  const finishPage = () => {
+    pages.push(rows);
+    rows = [];
+    usedHeight = 0;
+  };
+
+  for (const term of terms) {
+    let remainingLines = wrapTextLines(document, term.text, contentWidth, TERMS_FONT_SIZE);
+    let firstFragment = true;
+    while (remainingLines.length) {
+      const availableHeight = bodyHeight - usedHeight;
+      let availableLines = Math.floor((availableHeight - TERMS_ROW_PADDING) / lineHeight);
+      if (availableLines < 1 || (availableLines === 1 && availableHeight < 27)) {
+        finishPage();
+        availableLines = maxLinesPerPage;
+      }
+
+      if (remainingLines.length > availableLines && rows.length && remainingLines.length <= maxLinesPerPage) {
+        finishPage();
+        continue;
+      }
+
+      const lineCount = Math.min(remainingLines.length, availableLines);
+      rows.push({
+        number: firstFragment ? String(term.number) : "",
+        lines: remainingLines.slice(0, lineCount),
+      });
+      firstFragment = false;
+      usedHeight += Math.max(27, lineCount * lineHeight + TERMS_ROW_PADDING);
+      remainingLines = remainingLines.slice(lineCount);
+      if (remainingLines.length) finishPage();
     }
   }
 
-  const fallback: Array<[number, string]> = [
-    [1, "കറന്റ്, വെള്ളം: വാടകക്കാരൻ നേരിട്ട് അടയ്ക്കണം."],
-    [2, "സേഫ്റ്റി ലൈസൻസ്: വാടകക്കാരൻ എടുക്കണം."],
-    [3, `ഉപയോഗം: ഈ സ്ഥലം ${data.usageDescription?.trim() || ""} ആവശ്യത്തിനായി ഉപയോഗിക്കേണ്ടതാണ്.`],
-    [4, "ഉപ വാടക: ലീസുകാരന് ഈ ഉടമ്പടിയിലെ കെട്ടിടം മുഴുവനായോ ഭാഗികമായോ മറ്റാർക്കും വാടകയ്ക്ക് നൽകാനോ അനുവാദമില്ല."],
-    [5, "ഷെഡ്യൂൾ ആസ്തിയിൽ ലീസുകാരൻ മൂലമോ വാടകക്കാരൻ മൂലമോ സംഭവിക്കുന്ന നാശനഷ്ടങ്ങൾക്കും ഉത്തരവാദിത്തങ്ങൾക്കും ലീസുകാരൻ പൂർണമായും ഉത്തരവാദിയാകും."],
-    [6, "വാടകക്കാരൻ ഒഴിഞ്ഞതിന് ശേഷം, നാശനഷ്ടങ്ങൾ കുറച്ച ശേഷമുള്ള സുരക്ഷാദ്രവ്യം 15 ദിവസത്തിനുള്ളിൽ തിരിച്ചുനൽകപ്പെടും."],
-    [7, "വാടകക്കാരൻ തീയതിക്ക് മുൻപ് വാടക അടയ്ക്കാൻ കഴിയാതെ വന്നാൽ ഉടമയ്ക്ക് അഡ്വാൻസിൽ നിന്ന് തുക പിൻവലിക്കാനും ഒഴിപ്പിക്കാനും അവകാശമുണ്ട്."],
-    [8, "24 മണിക്കൂർ മുൻകൂട്ടി അറിയിപ്പിലൂടെ, ഉടമക്ക് അകത്തു പരിശോധന നടത്താം."],
-    [9, "ഗ്രൗണ്ട് ഫ്ളോറും ഫസ്റ്റ് ഫ്ളോറും ഉൾപ്പെടെ എല്ലാ ഷോപ്പ് ഉടമകൾക്കും പാർക്കിംഗ് മേഖല സമമായും പങ്കിട്ടായിരിക്കും."],
-    [10, "വാടകസ്ഥലം മുൻപേതുപോലെ കടയുടെ നെയിം ബോർഡ് സ്ഥാപിക്കുന്നതിനും നിർമ്മിക്കുന്നതിനും ഉടമയുടെ അനുമതി ആവശ്യമാണ്. അനുമതി ലഭിക്കാതെ ബോർഡുകൾ മാറ്റുകയോ സ്ഥാപിക്കുകയോ ചെയ്യരുത്."],
-    [11, "ഈ കരാർ പ്രകാരം ബാക്കിയുള്ള നിയമനിബന്ധനകൾക്കും പ്രവർത്തനത്തിനു അനുസൃതമായ നടപടികൾക്കും രണ്ട് പാർട്ടികളും ബാധ്യസ്ഥരാണ്. നിലവിലുള്ള നിയമങ്ങൾക്കും സർക്കാരിന്‍റെ ഉത്തരവുകൾക്കും ഇവ വിധേയമായിരിക്കും."],
-  ];
+  if (rows.length || !pages.length) finishPage();
+  return pages;
+}
 
-  const clauses = fallback.map(([number, fallbackText]) => [number, dynamicMap.get(number) || fallbackText] as [number, string]);
+async function drawTermsPage(
+  document: PDFDocumentType,
+  page: PDFPage,
+  rows: PdfTermRow[],
+  fontBytes: Buffer,
+  continuation: boolean,
+) {
+  const title = continuation
+    ? "പ്രധാന നിബന്ധനകളും വ്യവസ്ഥകളും (തുടർച്ച)"
+    : "പ്രധാന നിബന്ധനകളും വ്യവസ്ഥകളും";
+  await drawUnicodeText(document, page, title, fontBytes, 30, 744, 552, 15, true);
+
   const x = 30;
   const right = 582;
   const numberRight = 62;
-  const headerHeight = 30;
-  const rowsWithHeight = clauses.map(([number, text]) => {
-    const count = countWrappedLines(document, text, right - numberRight - 16, 9.6);
-    const rowHeight = Math.max(27, count * (13.5 * TEXT_LINE_SCALE) + 9);
-    return { number, text, rowHeight };
-  });
-  const tableBottom = y - headerHeight - rowsWithHeight.reduce((sum, row) => sum + row.rowHeight, 0);
+  const textWidth = right - numberRight - 16;
+  const lineHeight = TERMS_LINE_HEIGHT * TEXT_LINE_SCALE;
+  const rowHeights = rows.map((row) => Math.max(27, row.lines.length * lineHeight + TERMS_ROW_PADDING));
+  const tableBottom = TERMS_TOP - TERMS_HEADER_HEIGHT - rowHeights.reduce((sum, height) => sum + height, 0);
 
-  line(page, x, y, right, y, 0.7);
-  line(page, x, y - headerHeight, right, y - headerHeight, 0.7);
-  line(page, x, y, x, tableBottom, 0.7);
-  line(page, numberRight, y, numberRight, tableBottom, 0.7);
-  line(page, right, y, right, tableBottom, 0.7);
-  await drawUnicodeText(document, page, "ക്രമം", fontBytes, x + 5, y - 8, 27, 10.2, true);
-  await drawUnicodeText(document, page, "നിബന്ധനകൾ", fontBytes, numberRight + 10, y - 8, 240, 10.2, true);
-  y -= headerHeight;
+  line(page, x, TERMS_TOP, right, TERMS_TOP, 0.7);
+  line(page, x, TERMS_TOP - TERMS_HEADER_HEIGHT, right, TERMS_TOP - TERMS_HEADER_HEIGHT, 0.7);
+  line(page, x, TERMS_TOP, x, tableBottom, 0.7);
+  line(page, numberRight, TERMS_TOP, numberRight, tableBottom, 0.7);
+  line(page, right, TERMS_TOP, right, tableBottom, 0.7);
+  await drawUnicodeText(document, page, "ക്രമം", fontBytes, x + 5, TERMS_TOP - 8, 27, 10.2, true);
+  await drawUnicodeText(document, page, "നിബന്ധനകൾ", fontBytes, numberRight + 10, TERMS_TOP - 8, 240, 10.2, true);
 
-  for (const row of rowsWithHeight) {
-    const bottom = y - row.rowHeight;
-    await drawUnicodeText(document, page, String(row.number), fontBytes, x + 8, y - row.rowHeight / 2 + 7, 22, 10.5, true);
-    await drawWrapped(document, page, row.text, fontBytes, numberRight + 8, y - 8, right - numberRight - 16, 9.6, 13.5, true);
+  let y = TERMS_TOP - TERMS_HEADER_HEIGHT;
+  for (const [index, row] of rows.entries()) {
+    const rowHeight = rowHeights[index];
+    const bottom = y - rowHeight;
+    if (row.number) {
+      await drawUnicodeText(document, page, row.number, fontBytes, x + 8, y - rowHeight / 2 + 7, 22, 10.5, true);
+    }
+    const font = embeddedFonts.get(document);
+    if (!font) throw new Error("Malayalam Unicode font is not embedded in the PDF document.");
+    const displaySize = TERMS_FONT_SIZE * TEXT_FONT_SCALE;
+    for (const [lineIndex, text] of row.lines.entries()) {
+      page.drawText(text, {
+        x: numberRight + 8,
+        y: y - 8 - lineIndex * lineHeight - displaySize,
+        font,
+        size: displaySize,
+        color: BLACK,
+        maxWidth: textWidth,
+      });
+    }
     line(page, x, bottom, right, bottom, 0.55);
     y = bottom;
   }
   line(page, x, tableBottom, right, tableBottom, 0.7);
+  if (!rows.length) {
+    await drawUnicodeText(document, page, "ഈ കരാറിനായി നിബന്ധനകൾ ചേർത്തിട്ടില്ല.", fontBytes, numberRight + 8, TERMS_TOP - TERMS_HEADER_HEIGHT - 8, textWidth, 9.6, false);
+  }
 }
 
 async function drawPageFour(document: PDFDocumentType, page: PDFPage, data: AgreementPdfData, fontBytes: Buffer, totalPages: number) {
